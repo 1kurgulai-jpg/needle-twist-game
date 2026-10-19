@@ -2,6 +2,10 @@
 
 HTML5 ve Canvas kullanılarak geliştirilmiş, mobil tarayıcılarla ve dokunmatik ekranlarla tam uyumlu, renkli arayüzlü **Dönen Çarka İğne Saplama** oyunu.
 
+## 🌐 Canlı Oyna (Live Demo)
+- 🚀 **[Hemen Oyna (GitHub CDN Canlı Link)](https://raw.githack.com/1kurgulai-jpg/needle-twist-game/main/index.html)**
+- 🔗 **[GitHub Pages Linki](https://1kurgulai-jpg.github.io/needle-twist-game/)**
+
 ## ✨ Özellikler
 - **Mobil & Dokunmatik Uyumlu:** Akıllı telefon, tablet ve masaüstü tarayıcılarda kusursuz çalışır (`pointerdown` ve klavye desteği).
 - **Kademeli Artan Zorluk Seviyesi:** Sabit dönüş, ters dönüş, dalgalı hızlanma, çift yönlü salınım, dur-kalk ritmi ve her 5 seviyede bir Boss seviyeleri.
