@@ -2,7 +2,12 @@
 
 HTML5 ve Canvas kullanılarak geliştirilmiş, mobil tarayıcılarla ve dokunmatik ekranlarla tam uyumlu, renkli arayüzlü **Dönen Çarka İğne Saplama** oyunu.
 
-## 🌐 Canlı Oyna (Live Demo)
+## ▲ Vercel ile Tek Tıkla Yayınla (GitHub üzerinden)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/import?s=https%3A%2F%2Fgithub.com%2F1kurgulai-jpg%2Fneedle-twist-game)
+
+👉 **[GitHub Reponuzu Vercel'de Tek Tıkla Yayınlamak İçin Tıklayın](https://vercel.com/new/import?s=https%3A%2F%2Fgithub.com%2F1kurgulai-jpg%2Fneedle-twist-game)**
+
+## 🌐 Alternatif Canlı Linkler
 - 🚀 **[Hemen Oyna (GitHub CDN Canlı Link)](https://raw.githack.com/1kurgulai-jpg/needle-twist-game/main/index.html)**
 - 🔗 **[GitHub Pages Linki](https://1kurgulai-jpg.github.io/needle-twist-game/)**
 
