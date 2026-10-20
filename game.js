@@ -143,6 +143,10 @@
     direction: 1,
     pattern: 'STEADY',
     patternTimer: 0,
+    steps: [],
+    stepIndex: 0,
+    stepTraveled: 0,
+    pauseTimer: 0,
     pulseScale: 1,
     palette: WHEEL_PALETTES[0],
     matchedSegmentIdx: -1,
@@ -289,51 +293,78 @@
   function configureLevel(lvl) {
     wheel.palette = WHEEL_PALETTES[(lvl - 1) % WHEEL_PALETTES.length];
     wheel.patternTimer = 0;
+    wheel.stepIndex = 0;
+    wheel.stepTraveled = 0;
+    wheel.pauseTimer = 0;
     wheel.matchedSegmentIdx = -1;
     wheel.matchFlashAlpha = 0;
 
-    // Gentle speed progression: starts at 0.015 and rises slowly (+0.00105 per level, max 0.035)
+    // Gentle speed progression: starts at 0.0145 and rises smoothly (+0.00105 per level, max 0.035)
     const gentleBase = Math.min(0.0145 + (lvl - 1) * 0.00105, 0.035);
     wheel.baseSpeed = gentleBase;
 
     const isBoss = lvl % 5 === 0;
-    let patternName = 'Rahat Dönüş';
+    let patternName = 'Tam Tur Rahat Dönüş';
 
     if (lvl <= 2) {
       wheel.pattern = 'STEADY';
       wheel.direction = lvl === 1 ? 1 : -1;
-      patternName = lvl === 1 ? 'Rahat Dönüş' : 'Ters Yön • Dengeli';
-    } else if (lvl <= 4) {
+      wheel.steps = [];
+      patternName = lvl === 1 ? 'Tam Tur Rahat Dönüş' : 'Ters Yön Tam Tur';
+    } else if (lvl === 3) {
+      wheel.pattern = 'STEP_SEQUENCE';
+      wheel.steps = [
+        { turns: 1.35, speedMult: 1.0, pause: 0.18 },
+        { turns: -1.25, speedMult: 1.0, pause: 0.18 }
+      ];
+      patternName = '🔄 Tam Tur & Terse Dönüş';
+    } else if (lvl === 4) {
       wheel.pattern = 'GENTLE_WAVE';
-      wheel.direction = lvl % 2 === 1 ? 1 : -1;
-      patternName = '🌊 Yumuşak Tempo';
+      wheel.direction = 1;
+      wheel.steps = [];
+      patternName = '🌊 Tam Tur Dalgalı Tempo';
     } else if (isBoss) {
-      wheel.pattern = 'BOSS_RHYTHM';
-      wheel.direction = 1;
-      patternName = '👑 ÖZEL SEVİYE • Renk Avı';
-    } else if (lvl % 4 === 0) {
-      wheel.pattern = 'BREATHE_PACE';
-      wheel.direction = lvl % 8 === 0 ? -1 : 1;
-      patternName = '⚡ Yavaşla - Hızlan';
+      wheel.pattern = 'STEP_SEQUENCE';
+      wheel.steps = [
+        { turns: 1.3, speedMult: 1.12, pause: 0.15 },
+        { turns: -0.55, speedMult: 1.05, pause: 0.14 },
+        { turns: 1.25, speedMult: 1.15, pause: 0.15 },
+        { turns: -1.35, speedMult: 1.1, pause: 0.16 }
+      ];
+      patternName = '👑 BOSS • Tam & Yarım Tur Kombo';
     } else if (lvl % 3 === 0) {
-      wheel.pattern = 'SLOW_SWING';
-      wheel.direction = 1;
-      patternName = '🔄 Yumuşak Salınım';
+      // Yarım tur -> Tam tur -> Ters yarım tur -> Ters tam tur
+      wheel.pattern = 'STEP_SEQUENCE';
+      wheel.steps = [
+        { turns: 0.55, speedMult: 0.95, pause: 0.16 },
+        { turns: 1.25, speedMult: 1.08, pause: 0.18 },
+        { turns: -0.55, speedMult: 0.95, pause: 0.16 },
+        { turns: -1.3, speedMult: 1.08, pause: 0.18 }
+      ];
+      patternName = '🎯 Yarım + Tam + Ters Tur';
+    } else if (lvl % 2 === 1) {
+      // 1.35 tam tur ileri, 1.25 tam tur geri (asimetrik olduğu için dönüş noktası sürekli kayar)
+      wheel.pattern = 'STEP_SEQUENCE';
+      wheel.steps = [
+        { turns: 1.35, speedMult: 1.05, pause: 0.16 },
+        { turns: -1.2, speedMult: 1.05, pause: 0.16 }
+      ];
+      patternName = '🔄 Tam Tur İleri & Geri';
     } else {
       wheel.pattern = 'GENTLE_WAVE';
-      wheel.direction = lvl % 2 === 0 ? 1 : -1;
-      patternName = '🌊 Dengeli Akış';
+      wheel.direction = (lvl / 2) % 2 === 0 ? 1 : -1;
+      wheel.steps = [];
+      patternName = '🌊 Tam Tur Akıcı Tempo';
     }
 
     difficultyBanner.textContent = `Seviye ${lvl} • ${patternName}`;
 
-    // Pre-stuck pins: starts with just 1 pin on Level 1, grows very gradually up to max 6
+    // Pre-stuck pins: starts with 1 pin on Level 1, grows gradually up to max 6
     stuckPins = [];
-    const obstacleCount = lvl === 1 ? 1 : Math.min(1 + Math.floor(lvl / 2.4), 6);
+    const obstacleCount = lvl === 1 ? 1 : Math.min(1 + Math.floor(lvl / 2.2), 6);
     for (let i = 0; i < obstacleCount; i++) {
       const rawAngle = (Math.PI * 2 * i) / obstacleCount + 0.25;
       const angle = normalizeAngle(rawAngle);
-      // Color obstacle pins with the slice color they sit on so players can also color-match with them!
       const sliceCol = getSegmentColorAtAngle(angle);
       stuckPins.push({
         angle,
@@ -346,7 +377,7 @@
 
     // Bonus stars on wheel circumference (between obstacle pins)
     bonusStars = [];
-    const starCount = isBoss ? 3 : lvl >= 2 ? Math.min(1 + Math.floor(lvl / 4), 2) : 1;
+    const starCount = isBoss ? 3 : lvl >= 2 ? Math.min(1 + Math.floor(lvl / 3), 3) : 1;
     for (let s = 0; s < starCount; s++) {
       const candidateAngle = normalizeAngle(((s + 0.5) * Math.PI * 2) / starCount);
       const tooClose = stuckPins.some((p) => angularDistance(p.angle, candidateAngle) < 0.32);
@@ -359,8 +390,8 @@
       }
     }
 
-    // Pins player must throw: starts at 5, grows slowly (~1 extra pin every 2 levels, max 12)
-    totalPinsForLevel = Math.min(5 + Math.floor((lvl - 1) * 0.55), 12);
+    // Pins player must throw: starts at 6 and increases steadily with level up to 16
+    totalPinsForLevel = Math.min(6 + Math.floor((lvl - 1) * 0.85), 16);
     pinsRemaining = totalPinsForLevel;
     activePin = null;
 
@@ -470,37 +501,51 @@
       return;
     }
 
-    // Smooth, Balanced Wheel Rotation Patterns
+    // Smooth, Full-360° Coverage Wheel Rotation Patterns
     wheel.patternTimer += dt;
     const baseRadPerSec = wheel.baseSpeed * 60;
 
-    switch (wheel.pattern) {
-      case 'STEADY':
-        wheel.currentSpeed = baseRadPerSec * wheel.direction;
-        break;
-      case 'GENTLE_WAVE': {
-        const wave = 0.82 + 0.28 * Math.sin(wheel.patternTimer * 1.6);
-        wheel.currentSpeed = baseRadPerSec * wave * wheel.direction;
-        break;
-      }
-      case 'SLOW_SWING': {
-        const osc = Math.sin(wheel.patternTimer * 0.95);
-        wheel.currentSpeed = baseRadPerSec * 1.05 * osc;
-        break;
-      }
-      case 'BREATHE_PACE': {
-        const factor = 0.68 + 0.45 * Math.cos(wheel.patternTimer * 1.8);
-        wheel.currentSpeed = baseRadPerSec * factor * wheel.direction;
-        break;
-      }
-      case 'BOSS_RHYTHM': {
-        const swing = 0.85 * Math.sin(wheel.patternTimer * 1.25) + 0.35 * Math.cos(wheel.patternTimer * 2.1);
-        wheel.currentSpeed = baseRadPerSec * swing;
-        break;
-      }
-    }
+    if (wheel.pattern === 'STEP_SEQUENCE' && wheel.steps.length > 0) {
+      if (wheel.pauseTimer > 0) {
+        wheel.pauseTimer = Math.max(0, wheel.pauseTimer - dt);
+        wheel.currentSpeed = 0;
+      } else {
+        const currentStep = wheel.steps[wheel.stepIndex];
+        const targetRad = Math.abs(currentStep.turns) * Math.PI * 2;
+        const dir = currentStep.turns >= 0 ? 1 : -1;
+        const remainingRad = Math.max(0, targetRad - wheel.stepTraveled);
 
-    wheel.angle = normalizeAngle(wheel.angle + wheel.currentSpeed * dt);
+        // Smooth acceleration at start & smooth deceleration near end of each step
+        const easeZone = Math.min(0.45, targetRad * 0.25);
+        let easeFactor = 1;
+        if (wheel.stepTraveled < easeZone) {
+          easeFactor = 0.28 + 0.72 * (wheel.stepTraveled / easeZone);
+        } else if (remainingRad < easeZone) {
+          easeFactor = 0.25 + 0.75 * (remainingRad / easeZone);
+        }
+
+        const speedMag = baseRadPerSec * (currentStep.speedMult || 1) * easeFactor;
+        const stepDelta = speedMag * dt;
+        wheel.currentSpeed = speedMag * dir;
+        wheel.angle = normalizeAngle(wheel.angle + wheel.currentSpeed * dt);
+        wheel.stepTraveled += stepDelta;
+
+        if (wheel.stepTraveled >= targetRad) {
+          wheel.stepTraveled = 0;
+          wheel.pauseTimer = currentStep.pause || 0.15;
+          wheel.stepIndex = (wheel.stepIndex + 1) % wheel.steps.length;
+        }
+      }
+    } else if (wheel.pattern === 'GENTLE_WAVE') {
+      // Always positive in its direction so it continuously completes full 360° turns
+      const wave = 0.65 + 0.45 * Math.sin(wheel.patternTimer * 1.65);
+      wheel.currentSpeed = baseRadPerSec * wave * wheel.direction;
+      wheel.angle = normalizeAngle(wheel.angle + wheel.currentSpeed * dt);
+    } else {
+      // STEADY
+      wheel.currentSpeed = baseRadPerSec * wheel.direction;
+      wheel.angle = normalizeAngle(wheel.angle + wheel.currentSpeed * dt);
+    }
 
     // Animate bonus stars
     bonusStars.forEach((s) => {
