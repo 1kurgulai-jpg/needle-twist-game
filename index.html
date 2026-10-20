@@ -6,8 +6,25 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="theme-color" content="#0f1026" />
+  <meta name="theme-color" content="#0a1628" />
   <title>Renkli Çark - İğne Saplama Oyunu</title>
+
+  <!-- Google Analytics (GA4) Ziyaretçi ve Etkinlik Takip Altyapısı -->
+  <!-- Not: Kendi GA4 Measurement ID'nizi (örn. G-XXXXXXXXXX) GA_MEASUREMENT_ID değişkenine yazabilirsiniz -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-NEEDLETWIST"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+
+    window.GA_MEASUREMENT_ID = 'G-NEEDLETWIST';
+    gtag('config', window.GA_MEASUREMENT_ID, {
+      page_title: 'Renkli Çark - Needle Twist Game',
+      page_location: window.location.href,
+      send_page_view: true
+    });
+  </script>
+
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -27,13 +44,13 @@
         <span class="hud-value best" id="hudBest">0</span>
       </div>
       <div class="hud-actions">
-        <button class="icon-btn" id="btnScoreboard" title="Skor Tablosu" aria-label="Skor Tablosu">🏆</button>
+        <button class="icon-btn" id="btnScoreboard" title="Küresel Skor Tablosu" aria-label="Küresel Skor Tablosu">🏆</button>
         <button class="icon-btn" id="btnSound" title="Sesi Aç/Kapat" aria-label="Sesi Aç/Kapat">🔊</button>
       </div>
     </header>
 
     <!-- Dynamic Difficulty Mode Indicator -->
-    <div class="difficulty-banner" id="difficultyBanner">Seviye 1 • Rahat Dönüş</div>
+    <div class="difficulty-banner" id="difficultyBanner">Seviye 1 • Tam Tur Rahat Dönüş</div>
 
     <!-- Main Game Canvas -->
     <canvas id="gameCanvas"></canvas>
@@ -49,7 +66,7 @@
         <div class="stats-grid" id="endStats" style="display: none;">
           <div class="stat-box">
             <div class="label">Son Skor</div>
-            <div class="val" id="finalScore" style="color: #00e5ff;">0</div>
+            <div class="val" id="finalScore" style="color: #00f5d4;">0</div>
           </div>
           <div class="stat-box">
             <div class="label">Ulaşılan Seviye</div>
@@ -59,15 +76,29 @@
 
         <!-- Save Score Form (shown on Game Over) -->
         <form class="save-score-form" id="saveScoreForm" style="display: none;">
-          <input type="text" id="playerNameInput" maxlength="16" placeholder="Adını yaz (Örn: Oyuncu1)" autocomplete="off" />
-          <button type="submit" class="btn btn-small">Kaydet</button>
+          <input
+            type="text"
+            id="playerNameInput"
+            maxlength="16"
+            placeholder="Takma adını gir (Nickname)..."
+            autocomplete="nickname"
+            required
+          />
+          <button type="submit" class="btn btn-small" id="btnSubmitScore">Skoru Kaydet 🚀</button>
         </form>
+        <div class="save-feedback" id="saveFeedback" style="display: none;"></div>
 
-        <!-- Leaderboard -->
+        <!-- Global Leaderboard (Turquoise / Modern Theme) -->
         <div class="scoreboard-section">
           <div class="scoreboard-header">
-            <span class="scoreboard-title">🏆 En Yüksek Skorlar</span>
-            <button type="button" class="clear-btn" id="btnClearScores">Sıfırla</button>
+            <div class="scoreboard-title-group">
+              <span class="scoreboard-title">🏆 Küresel İlk 10 Skor Tablosu</span>
+              <span class="sync-badge" id="syncBadge">● Canlı</span>
+            </div>
+            <div class="scoreboard-actions">
+              <button type="button" class="refresh-btn" id="btnRefreshScores" title="Skorları Yenile">↻ Yenile</button>
+              <button type="button" class="clear-btn" id="btnClearScores" title="Yerel önbelleği sıfırla">Sıfırla</button>
+            </div>
           </div>
           <div class="scoreboard-list" id="scoreboardList"></div>
         </div>
