@@ -9,6 +9,11 @@
   <meta name="theme-color" content="#0a1628" />
   <title>Renkli Çark - İğne Saplama Oyunu</title>
 
+  <!-- Web Sitesi İkonu (Favicon) ve Mobil Ana Ekran İkonu (Apple Touch Icon) -->
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/images/logo.png" />
+  <link rel="shortcut icon" type="image/png" href="assets/images/logo.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/images/logo.png" />
+
   <!-- Google Analytics (GA4) Global Site Etiketi (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-9NV6P1MDQQ"></script>
   <script>
@@ -57,6 +62,9 @@
     <!-- Start / Pause / Scoreboard / Game Over Overlay -->
     <div class="overlay" id="mainOverlay">
       <div class="modal-card">
+        <div class="modal-logo-wrap" id="modalLogoWrap">
+          <img src="assets/images/logo.png" alt="Renkli Çark Logo" class="modal-logo" />
+        </div>
         <h1 class="game-title" id="modalTitle">RENKLİ ÇARK</h1>
         <p class="modal-subtitle" id="modalSubtitle">
           İğneleri kendi rengindeki çark dilimine veya aynı renkli iğnenin yanına saplayarak <strong>2x Renk Uyumu Bonusu</strong> kazan!
