@@ -2,7 +2,11 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0f1026" />
   <title>Renkli Çark - İğne Saplama Oyunu</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -29,19 +33,17 @@
     </header>
 
     <!-- Dynamic Difficulty Mode Indicator -->
-    <div class="difficulty-banner" id="difficultyBanner">Seviye 1 • Sabit Dönüş</div>
+    <div class="difficulty-banner" id="difficultyBanner">Seviye 1 • Rahat Dönüş</div>
 
     <!-- Main Game Canvas -->
     <canvas id="gameCanvas"></canvas>
-
-    <div class="touch-hint" id="touchHint">İğne fırlatmak için ekrana dokun veya [Boşluk] tuşuna bas</div>
 
     <!-- Start / Pause / Scoreboard / Game Over Overlay -->
     <div class="overlay" id="mainOverlay">
       <div class="modal-card">
         <h1 class="game-title" id="modalTitle">RENKLİ ÇARK</h1>
         <p class="modal-subtitle" id="modalSubtitle">
-          Dönen renkli çarka diğer iğnelere çarpmadan tüm iğneleri sapla! Yıldızları vurarak ekstra puan kazan.
+          İğneleri kendi rengindeki çark dilimine veya aynı renkli iğnenin yanına saplayarak <strong>2x Renk Uyumu Bonusu</strong> kazan!
         </p>
 
         <div class="stats-grid" id="endStats" style="display: none;">
