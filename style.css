@@ -9,6 +9,8 @@
   --text-dim: rgba(255, 255, 255, 0.72);
   --glass-bg: rgba(20, 24, 52, 0.82);
   --glass-border: rgba(255, 255, 255, 0.16);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 * {
@@ -22,9 +24,13 @@
 }
 
 html, body {
+  position: fixed;
+  inset: 0;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
+  overscroll-behavior: none;
   background: radial-gradient(circle at 50% 35%, var(--bg-accent), var(--bg-dark) 80%);
   font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
   color: var(--text-light);
@@ -35,6 +41,7 @@ html, body {
   position: relative;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   max-width: 540px;
   margin: 0 auto;
   display: flex;
@@ -43,23 +50,33 @@ html, body {
   box-shadow: 0 0 50px rgba(0, 0, 0, 0.6);
 }
 
+@media (max-width: 600px) {
+  #game-container {
+    max-width: 100%;
+    width: 100vw;
+    height: 100dvh;
+    box-shadow: none;
+  }
+}
+
 #gameCanvas {
   width: 100%;
   height: 100%;
   display: block;
   cursor: pointer;
+  touch-action: none;
 }
 
 /* Top HUD */
 .hud {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  right: 12px;
+  top: calc(10px + var(--safe-top));
+  left: 10px;
+  right: 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   pointer-events: none;
   z-index: 10;
 }
@@ -69,25 +86,27 @@ html, body {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border);
-  border-radius: 14px;
-  padding: 8px 12px;
+  border-radius: 13px;
+  padding: 6px 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 78px;
+  min-width: 70px;
+  flex: 1;
+  max-width: 110px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
 }
 
 .hud-label {
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.7px;
   color: var(--text-dim);
   font-weight: 700;
 }
 
 .hud-value {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
   line-height: 1.15;
   margin-top: 2px;
@@ -112,13 +131,13 @@ html, body {
 }
 
 .icon-btn {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   border-radius: 12px;
   border: 1px solid var(--glass-border);
   background: var(--glass-bg);
   color: var(--text-light);
-  font-size: 18px;
+  font-size: 17px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -134,17 +153,17 @@ html, body {
 /* Difficulty Badge */
 .difficulty-banner {
   position: absolute;
-  top: 76px;
+  top: calc(68px + var(--safe-top));
   left: 50%;
   transform: translateX(-50%);
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
   backdrop-filter: blur(6px);
-  padding: 4px 14px;
+  padding: 4px 13px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 700;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.4px;
   color: #ffe57f;
   pointer-events: none;
   z-index: 10;
@@ -162,7 +181,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: calc(16px + var(--safe-top)) 16px calc(16px + var(--safe-bottom));
   z-index: 30;
   opacity: 1;
   transition: opacity 0.25s ease;
@@ -176,10 +195,12 @@ html, body {
 .modal-card {
   width: 100%;
   max-width: 390px;
+  max-height: 92dvh;
+  overflow-y: auto;
   background: linear-gradient(160deg, rgba(32, 38, 82, 0.96), rgba(18, 20, 48, 0.98));
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 24px;
-  padding: 24px 20px;
+  padding: 22px 18px;
   text-align: center;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
   animation: popIn 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -197,7 +218,7 @@ html, body {
 }
 
 .game-title {
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 900;
   background: linear-gradient(90deg, #ff3366, #ffcc00, #00e5ff);
   -webkit-background-clip: text;
@@ -206,9 +227,9 @@ html, body {
 }
 
 .modal-subtitle {
-  font-size: 14px;
+  font-size: 13.5px;
   color: var(--text-dim);
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   line-height: 1.4;
 }
 
@@ -216,14 +237,14 @@ html, body {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .stat-box {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 14px;
-  padding: 10px;
+  padding: 9px;
 }
 
 .stat-box .label {
@@ -233,7 +254,7 @@ html, body {
 }
 
 .stat-box .val {
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 800;
   margin-top: 2px;
 }
@@ -242,7 +263,7 @@ html, body {
 .save-score-form {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .save-score-form input {
@@ -285,7 +306,7 @@ html, body {
   background: linear-gradient(135deg, #ff3366, #ff6b35);
   color: #fff;
   box-shadow: 0 8px 20px rgba(255, 51, 102, 0.4);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .btn-secondary {
@@ -304,7 +325,7 @@ html, body {
 
 /* Leaderboard Table */
 .scoreboard-section {
-  margin: 14px 0 18px;
+  margin: 12px 0 16px;
   text-align: left;
 }
 
@@ -316,7 +337,7 @@ html, body {
 }
 
 .scoreboard-title {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.8px;
@@ -333,7 +354,7 @@ html, body {
 }
 
 .scoreboard-list {
-  max-height: 185px;
+  max-height: 165px;
   overflow-y: auto;
   background: rgba(0, 0, 0, 0.28);
   border-radius: 14px;
@@ -409,19 +430,7 @@ html, body {
 
 .empty-scores {
   text-align: center;
-  padding: 18px;
+  padding: 16px;
   font-size: 13px;
   color: var(--text-dim);
-}
-
-.touch-hint {
-  position: absolute;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.55);
-  pointer-events: none;
-  z-index: 8;
-  white-space: nowrap;
 }
