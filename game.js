@@ -1,5 +1,6 @@
 /**
  * RENKLİ ÇARK - HTML5 & Canvas Mobil Uyumlu İğne Saplama Oyunu
+ * Google Analytics (GA4) & Küresel Skor Tablosu (Global Leaderboard) Entegrasyonlu
  */
 
 (() => {
@@ -19,18 +20,51 @@
   const finalLevelEl = document.getElementById('finalLevel');
   const saveScoreForm = document.getElementById('saveScoreForm');
   const playerNameInput = document.getElementById('playerNameInput');
+  const btnSubmitScore = document.getElementById('btnSubmitScore');
+  const saveFeedback = document.getElementById('saveFeedback');
+  const syncBadge = document.getElementById('syncBadge');
   const scoreboardList = document.getElementById('scoreboardList');
   const btnStartGame = document.getElementById('btnStartGame');
   const btnScoreboard = document.getElementById('btnScoreboard');
   const btnSound = document.getElementById('btnSound');
+  const btnRefreshScores = document.getElementById('btnRefreshScores');
   const btnClearScores = document.getElementById('btnClearScores');
 
-  // Constants & Palettes (6 distinct vibrant colors per palette for clear color-matching)
-  const STORAGE_KEY_SCORES = 'renkli_cark_leaderboard_v1';
+  // Storage & Cloud Leaderboard Endpoints
+  const STORAGE_KEY_SCORES = 'renkli_cark_leaderboard_v2';
   const STORAGE_KEY_LAST_NAME = 'renkli_cark_player_name';
+  // İsteğe bağlı özel Firebase Realtime Database URL'si (örn: 'https://proje-adi-default-rtdb.firebaseio.com/scores.json')
+  const FIREBASE_DB_URL = window.FIREBASE_DB_URL || '';
+  // Sıfır kurulum gerektiren gerçek zamanlı küresel bulut skor kanalı
+  const CLOUD_LEADERBOARD_TOPIC = 'needle_twist_leaderboard_1kurgulai_v1';
+  const CLOUD_LEADERBOARD_URL = `https://ntfy.sh/${CLOUD_LEADERBOARD_TOPIC}`;
+
+  // Başlangıç küresel rekabet tablosu (Bulut verileriyle birleştirilir)
+  const SEED_GLOBAL_SCORES = [
+    { id: 'seed-1', name: 'TurkuazUsta', score: 580, level: 6, date: '20.10.2026' },
+    { id: 'seed-2', name: 'CarkAvcisi', score: 440, level: 5, date: '20.10.2026' },
+    { id: 'seed-3', name: 'RenkKeskin', score: 310, level: 4, date: '20.10.2026' },
+    { id: 'seed-4', name: 'NeonRefleks', score: 220, level: 3, date: '20.10.2026' },
+    { id: 'seed-5', name: 'IgneBeyi', score: 140, level: 2, date: '20.10.2026' }
+  ];
+
+  // Google Analytics (GA4) Yardımcı Fonksiyonu
+  function trackAnalyticsEvent(eventName, params = {}) {
+    try {
+      if (typeof window.gtag === 'function') {
+        window.gtag('event', eventName, {
+          ...params,
+          game_name: 'needle_twist_game',
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch {
+      // Ad-blocker veya çevrimdışı durumda sessizce devam et
+    }
+  }
 
   const WHEEL_PALETTES = [
-    ['#FF3366', '#FF9933', '#FFCC00', '#00E676', '#00E5FF', '#9B5DE5'],
+    ['#00F5D4', '#00BBF9', '#FF3366', '#FFCC00', '#9B5DE5', '#FF9933'],
     ['#F72585', '#FF9E00', '#FEE440', '#06D6A0', '#00BBF9', '#7209B7'],
     ['#FF595E', '#FF924C', '#FFCA3A', '#8AC926', '#1982C4', '#6A4C93'],
     ['#EF476F', '#F78C6B', '#FFD166', '#06D6A0', '#118AB2', '#8338EC']
@@ -129,6 +163,7 @@
   let lastThrowTime = 0;
   let scoreSavedForRun = false;
   let latestSavedId = null;
+  let cachedCloudScores = [];
 
   // Geometry
   let wheel = {
@@ -155,7 +190,7 @@
 
   let stuckPins = []; // { angle, color, isObstacle, scale, matched }
   let bonusStars = []; // { angle, hit, pulse }
-  let pinQueueColors = []; // Pre-generated colors for remaining pins
+  let pinQueueColors = [];
   let activePin = null; // { x, y, vy, color }
   let pinsRemaining = 0;
   let totalPinsForLevel = 0;
@@ -166,8 +201,8 @@
   let flashColor = null;
   let flashAlpha = 0;
 
-  // Leaderboard Management
-  function getScores() {
+  // Küresel & Yerel Skor Tablosu Yönetimi (Global Top 10 Leaderboard)
+  function getLocalScores() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_SCORES);
       return raw ? JSON.parse(raw) : [];
@@ -176,37 +211,182 @@
     }
   }
 
-  function saveScoreEntry(name, pts, lvl) {
-    const list = getScores();
-    const entry = {
-      id: Date.now(),
-      name: (name || 'Oyuncu').trim().slice(0, 16) || 'Oyuncu',
-      score: pts,
-      level: lvl,
-      date: new Date().toLocaleDateString('tr-TR')
-    };
-    list.push(entry);
-    list.sort((a, b) => b.score - a.score || b.level - a.level);
-    const trimmed = list.slice(0, 10);
+  function setLocalScores(list) {
     try {
-      localStorage.setItem(STORAGE_KEY_SCORES, JSON.stringify(trimmed));
-      localStorage.setItem(STORAGE_KEY_LAST_NAME, entry.name);
+      localStorage.setItem(STORAGE_KEY_SCORES, JSON.stringify(list.slice(0, 20)));
     } catch {
-      // ignore storage quota errors
+      // ignore quota errors
     }
-    latestSavedId = entry.id;
+  }
+
+  function mergeAndSortTop10(...scoreArrays) {
+    const combined = [...SEED_GLOBAL_SCORES, ...cachedCloudScores, ...getLocalScores(), ...scoreArrays.flat()];
+    const uniqueMap = new Map();
+
+    for (const item of combined) {
+      if (!item || typeof item.score !== 'number' || !item.name) continue;
+      const cleanName = String(item.name).trim().slice(0, 16) || 'Oyuncu';
+      const key = item.id ? String(item.id) : `${cleanName.toLowerCase()}_${item.score}_${item.level}`;
+      const existing = uniqueMap.get(key);
+      if (!existing || item.score > existing.score) {
+        uniqueMap.set(key, {
+          id: item.id || key,
+          name: cleanName,
+          score: Number(item.score) || 0,
+          level: Number(item.level) || 1,
+          date: item.date || ''
+        });
+      }
+    }
+
+    const sorted = Array.from(uniqueMap.values()).sort((a, b) => b.score - a.score || b.level - a.level);
+    return sorted.slice(0, 10);
+  }
+
+  async function fetchGlobalScores() {
+    if (syncBadge) {
+      syncBadge.textContent = '⏳ Senkronize...';
+    }
+
+    try {
+      // 1. Özel Firebase Realtime DB tanımlıysa oradan çek
+      if (FIREBASE_DB_URL) {
+        const res = await fetch(FIREBASE_DB_URL);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && typeof data === 'object') {
+            cachedCloudScores = Object.values(data);
+          }
+        }
+      } else {
+        // 2. Varsayılan Küresel Bulut Kanalından (ntfy JSON stream) son skorları çek
+        const res = await fetch(`${CLOUD_LEADERBOARD_URL}/json?poll=1&since=720h`, {
+          cache: 'no-store'
+        });
+        if (res.ok) {
+          const text = await res.text();
+          const lines = text.split('\n').filter((l) => l.trim().length > 0);
+          const parsed = [];
+          for (const line of lines) {
+            try {
+              const envelope = JSON.parse(line);
+              if (envelope && envelope.event === 'message' && envelope.message) {
+                const scoreObj = JSON.parse(envelope.message);
+                if (scoreObj && typeof scoreObj.score === 'number') {
+                  parsed.push(scoreObj);
+                }
+              }
+            } catch {
+              // skip malformed line
+            }
+          }
+          if (parsed.length > 0) {
+            cachedCloudScores = parsed;
+          }
+        }
+      }
+
+      if (syncBadge) {
+        syncBadge.textContent = '🌐 Canlı Küresel';
+      }
+    } catch {
+      if (syncBadge) {
+        syncBadge.textContent = '📱 Çevrimdışı Önbellek';
+      }
+    }
+
     renderScoreboard();
     updateHudBest();
   }
 
+  async function saveScoreEntry(name, pts, lvl) {
+    const cleanName = (name || 'Oyuncu').trim().slice(0, 16) || 'Oyuncu';
+    const entry = {
+      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: cleanName,
+      score: Number(pts) || 0,
+      level: Number(lvl) || 1,
+      date: new Date().toLocaleDateString('tr-TR')
+    };
+
+    latestSavedId = entry.id;
+
+    // 1. Yerel hafızaya anında kaydet
+    const localList = getLocalScores();
+    localList.push(entry);
+    localList.sort((a, b) => b.score - a.score || b.level - a.level);
+    setLocalScores(localList);
+
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_NAME, cleanName);
+    } catch {
+      // ignore
+    }
+
+    cachedCloudScores.push(entry);
+    renderScoreboard();
+    updateHudBest();
+
+    // GA4 Etkinliği Gönder
+    trackAnalyticsEvent('leaderboard_submit', {
+      player_name: cleanName,
+      score: entry.score,
+      level: entry.level
+    });
+
+    // 2. Küresel Bulut Veritabanına Gönder
+    if (syncBadge) {
+      syncBadge.textContent = '⏳ Gönderiliyor...';
+    }
+    try {
+      if (FIREBASE_DB_URL) {
+        await fetch(FIREBASE_DB_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entry)
+        });
+      } else {
+        await fetch(CLOUD_LEADERBOARD_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: JSON.stringify(entry)
+        });
+      }
+      if (syncBadge) {
+        syncBadge.textContent = '🌐 Canlı Küresel';
+      }
+      if (saveFeedback) {
+        saveFeedback.style.display = 'block';
+        saveFeedback.textContent = `✅ "${cleanName}" küresel skor tablosuna kaydedildi!`;
+      }
+    } catch {
+      if (syncBadge) {
+        syncBadge.textContent = '📱 Yerel Kaydedildi';
+      }
+      if (saveFeedback) {
+        saveFeedback.style.display = 'block';
+        saveFeedback.textContent = `✅ "${cleanName}" skor tablosuna kaydedildi!`;
+      }
+    }
+
+    renderScoreboard();
+  }
+
   function updateHudBest() {
-    const list = getScores();
-    const best = list.length > 0 ? Math.max(list[0].score, score) : score;
+    const top10 = mergeAndSortTop10();
+    const best = top10.length > 0 ? Math.max(top10[0].score, score) : score;
     hudBest.textContent = best;
   }
 
+  function getRankDisplay(idx) {
+    if (idx === 0) return '🥇';
+    if (idx === 1) return '🥈';
+    if (idx === 2) return '🥉';
+    return String(idx + 1);
+  }
+
   function renderScoreboard() {
-    const list = getScores();
+    const list = mergeAndSortTop10();
     if (list.length === 0) {
       scoreboardList.innerHTML = `<div class="empty-scores">Henüz kayıtlı skor yok. İlk rekoru sen kır! 🎯</div>`;
       return;
@@ -216,7 +396,7 @@
       .map(
         (item, idx) => `
         <div class="score-row ${item.id === latestSavedId ? 'highlight' : ''}">
-          <span class="rank-badge">${idx + 1}</span>
+          <span class="rank-badge">${getRankDisplay(idx)}</span>
           <span class="player-name">${escapeHtml(item.name)}</span>
           <span class="player-lvl">Sv. ${item.level}</span>
           <span class="player-pts">${item.score} P</span>
@@ -247,7 +427,6 @@
     canvas.height = Math.floor(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // Calculate vertical safe zones so wheel + pins + launch pad fit any mobile screen
     const topHudBottom = 104;
     const usableHeight = Math.max(320, height - topHudBottom);
     const minDim = Math.min(width, usableHeight * 0.92);
@@ -289,7 +468,7 @@
     return wheel.palette[getSegmentIndexAtAngle(relativeAngle)];
   }
 
-  // Balanced & Gradual Progressive Difficulty Configuration
+  // Balanced & Gradual Progressive Difficulty Configuration (Full 360° Coverage)
   function configureLevel(lvl) {
     wheel.palette = WHEEL_PALETTES[(lvl - 1) % WHEEL_PALETTES.length];
     wheel.patternTimer = 0;
@@ -333,7 +512,6 @@
       ];
       patternName = '👑 BOSS • Tam & Yarım Tur Kombo';
     } else if (lvl % 3 === 0) {
-      // Yarım tur -> Tam tur -> Ters yarım tur -> Ters tam tur
       wheel.pattern = 'STEP_SEQUENCE';
       wheel.steps = [
         { turns: 0.55, speedMult: 0.95, pause: 0.16 },
@@ -343,7 +521,6 @@
       ];
       patternName = '🎯 Yarım + Tam + Ters Tur';
     } else if (lvl % 2 === 1) {
-      // 1.35 tam tur ileri, 1.25 tam tur geri (asimetrik olduğu için dönüş noktası sürekli kayar)
       wheel.pattern = 'STEP_SEQUENCE';
       wheel.steps = [
         { turns: 1.35, speedMult: 1.05, pause: 0.16 },
@@ -375,7 +552,7 @@
       });
     }
 
-    // Bonus stars on wheel circumference (between obstacle pins)
+    // Bonus stars on wheel circumference
     bonusStars = [];
     const starCount = isBoss ? 3 : lvl >= 2 ? Math.min(1 + Math.floor(lvl / 3), 3) : 1;
     for (let s = 0; s < starCount; s++) {
@@ -395,7 +572,6 @@
     pinsRemaining = totalPinsForLevel;
     activePin = null;
 
-    // Build queue of pin colors from current palette so every pin has a matching target on the wheel
     pinQueueColors = [];
     for (let i = 0; i < totalPinsForLevel; i++) {
       pinQueueColors.push(wheel.palette[i % wheel.palette.length]);
@@ -424,10 +600,11 @@
     activePin = {
       x: wheel.x,
       y: getLaunchY(),
-      vy: -Math.max(1150, height * 1.9), // fast, crisp throw
+      vy: -Math.max(1150, height * 1.9),
       color: getCurrentPinColor()
     };
     sfx.throwPin();
+    trackAnalyticsEvent('pin_throw', { level, pins_remaining: pinsRemaining - 1 });
   }
 
   // Particle & Floating Text Helpers
@@ -472,13 +649,11 @@
 
   // Update Loop
   function update(dt) {
-    // Screen Shake & Flash decay
     if (shakeTime > 0) shakeTime = Math.max(0, shakeTime - dt);
     if (flashAlpha > 0) flashAlpha = Math.max(0, flashAlpha - dt * 1.5);
     if (wheel.matchFlashAlpha > 0) wheel.matchFlashAlpha = Math.max(0, wheel.matchFlashAlpha - dt * 1.8);
     wheel.pulseScale += (1 - wheel.pulseScale) * Math.min(1, dt * 14);
 
-    // Update particles
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx * dt;
@@ -488,7 +663,6 @@
       if (p.alpha <= 0) particles.splice(i, 1);
     }
 
-    // Update floating texts
     for (let i = floatingTexts.length - 1; i >= 0; i--) {
       const ft = floatingTexts[i];
       ft.y += ft.vy * dt;
@@ -515,7 +689,6 @@
         const dir = currentStep.turns >= 0 ? 1 : -1;
         const remainingRad = Math.max(0, targetRad - wheel.stepTraveled);
 
-        // Smooth acceleration at start & smooth deceleration near end of each step
         const easeZone = Math.min(0.45, targetRad * 0.25);
         let easeFactor = 1;
         if (wheel.stepTraveled < easeZone) {
@@ -537,32 +710,26 @@
         }
       }
     } else if (wheel.pattern === 'GENTLE_WAVE') {
-      // Always positive in its direction so it continuously completes full 360° turns
       const wave = 0.65 + 0.45 * Math.sin(wheel.patternTimer * 1.65);
       wheel.currentSpeed = baseRadPerSec * wave * wheel.direction;
       wheel.angle = normalizeAngle(wheel.angle + wheel.currentSpeed * dt);
     } else {
-      // STEADY
       wheel.currentSpeed = baseRadPerSec * wheel.direction;
       wheel.angle = normalizeAngle(wheel.angle + wheel.currentSpeed * dt);
     }
 
-    // Animate bonus stars
     bonusStars.forEach((s) => {
       s.pulse += dt * 5;
     });
 
-    // Update Active Thrown Pin
     if (activePin && gameState === 'PLAYING') {
       activePin.y += activePin.vy * dt;
 
       const targetTipY = wheel.y + wheel.radius;
       if (activePin.y <= targetTipY) {
-        // Pin reached wheel rim at bottom (angle = PI / 2 in canvas coordinates)
         const hitWorldAngle = Math.PI / 2;
         const relativeAngle = normalizeAngle(hitWorldAngle - wheel.angle);
 
-        // Forgiving collision threshold so close shots feel fair
         const outerRadius = wheel.radius + wheel.pinLength;
         const minSafeAngle = (wheel.pinHeadRadius * 1.72) / outerRadius;
 
@@ -588,7 +755,6 @@
     pinsRemaining--;
     wheel.pulseScale = 1.1;
 
-    // Combo calculation (fast consecutive throws increase combo)
     const now = performance.now();
     if (now - lastThrowTime < 1200) {
       combo = Math.min(combo + 1, 8);
@@ -597,13 +763,11 @@
     }
     lastThrowTime = now;
 
-    // Color Match Check:
-    // 1. Does the pin color match the wheel segment color where it landed?
+    // Color Match Check
     const landedSegmentIdx = getSegmentIndexAtAngle(relativeAngle);
     const landedSegmentColor = wheel.palette[landedSegmentIdx];
     const isSliceMatch = landedSegmentColor.toLowerCase() === color.toLowerCase();
 
-    // 2. Did it land right next to another pin of the same color?
     const isNeighborPinMatch = stuckPins.some(
       (p) => p.color.toLowerCase() === color.toLowerCase() && angularDistance(p.angle, relativeAngle) < 0.42
     );
@@ -621,7 +785,6 @@
     const impactX = wheel.x;
     const impactY = wheel.y + wheel.radius;
 
-    // Check bonus star hit
     let starBonus = 0;
     for (const star of bonusStars) {
       if (!star.hit && angularDistance(star.angle, relativeAngle) < 0.26) {
@@ -648,6 +811,12 @@
         sfx.colorMatch(colorMatchStreak);
       }
       spawnParticles(impactX, impactY, color, 26, 1.25);
+
+      trackAnalyticsEvent('color_match_bonus', {
+        level,
+        streak: colorMatchStreak,
+        bonus_points: colorBonus
+      });
     } else {
       colorMatchStreak = 0;
       if (starBonus === 0) {
@@ -680,9 +849,14 @@
       updateHudBest();
 
       sfx.levelUp();
-      triggerFlash('#00e676', 0.3);
-      spawnParticles(wheel.x, wheel.y, '#00e676', 40, 1.5);
-      spawnFloatingText(wheel.x, wheel.y, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00e676', 21);
+      triggerFlash('#00f5d4', 0.3);
+      spawnParticles(wheel.x, wheel.y, '#00f5d4', 40, 1.5);
+      spawnFloatingText(wheel.x, wheel.y, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00f5d4', 21);
+
+      trackAnalyticsEvent('level_complete', {
+        level,
+        score
+      });
 
       setTimeout(() => {
         if (gameState === 'LEVEL_CLEAR') {
@@ -706,6 +880,11 @@
     spawnFloatingText(crashX, crashY - 20, 'ÇARPIŞMA!', '#ff5252', 24);
     collidedPin.color = '#ff1744';
 
+    trackAnalyticsEvent('game_over', {
+      final_score: score,
+      final_level: level
+    });
+
     setTimeout(() => {
       showGameOverModal();
     }, 650);
@@ -716,34 +895,21 @@
     ctx.clearRect(0, 0, width, height);
 
     ctx.save();
-    // Apply Screen Shake
     if (shakeTime > 0) {
       const dx = (Math.random() - 0.5) * 2 * shakeIntensity;
       const dy = (Math.random() - 0.5) * 2 * shakeIntensity;
       ctx.translate(dx, dy);
     }
 
-    // Subtle decorative background rings & color-match aim guide
     drawBackgroundDecor();
-
-    // Draw Stuck Pins (behind the wheel rim)
     drawStuckPins();
-
-    // Draw Bonus Stars on Rim
     drawBonusStars();
-
-    // Draw Colorful Segmented Wheel
     drawWheel();
-
-    // Draw Active Moving Pin & Waiting Queue
     drawActiveAndQueuedPins();
-
-    // Draw Particles & Floating Texts
     drawParticlesAndTexts();
 
     ctx.restore();
 
-    // Full-screen flash overlay on level clear or crash
     if (flashAlpha > 0 && flashColor) {
       ctx.save();
       ctx.fillStyle = flashColor;
@@ -755,14 +921,13 @@
 
   function drawBackgroundDecor() {
     ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+    ctx.strokeStyle = 'rgba(0, 245, 212, 0.06)';
     ctx.lineWidth = 1.5;
     const outerOrbit = wheel.radius + wheel.pinLength;
     ctx.beginPath();
     ctx.arc(wheel.x, wheel.y, outerOrbit, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Check if current bottom wheel segment matches the ready pin's color
     const currentReadyColor = getCurrentPinColor();
     const bottomRelativeAngle = normalizeAngle(Math.PI / 2 - wheel.angle);
     const bottomSliceColor = getSegmentColorAtAngle(bottomRelativeAngle);
@@ -772,7 +937,6 @@
       currentReadyColor &&
       bottomSliceColor.toLowerCase() === currentReadyColor.toLowerCase();
 
-    // Aim guide line from launch zone to wheel bottom
     ctx.setLineDash([5, 7]);
     ctx.strokeStyle = isTargetMatchingNow ? currentReadyColor : 'rgba(255, 255, 255, 0.14)';
     ctx.lineWidth = isTargetMatchingNow ? 2.5 : 1.5;
@@ -781,7 +945,6 @@
     ctx.lineTo(wheel.x, getLaunchY() - 14);
     ctx.stroke();
 
-    // Target zone indicator on bottom rim of wheel
     ctx.setLineDash([]);
     const targetY = wheel.y + wheel.radius + 6;
     ctx.fillStyle = isTargetMatchingNow ? currentReadyColor : 'rgba(255, 255, 255, 0.35)';
@@ -811,7 +974,6 @@
       const outerX = wheel.x + cos * outerDist;
       const outerY = wheel.y + sin * outerDist;
 
-      // Pin shaft
       ctx.save();
       ctx.strokeStyle = p.matched ? p.color : p.isObstacle ? 'rgba(225, 232, 238, 0.85)' : '#ffffff';
       ctx.lineWidth = p.matched ? 3.8 : 3.2;
@@ -821,7 +983,6 @@
       ctx.lineTo(outerX, outerY);
       ctx.stroke();
 
-      // Pin colorful head
       ctx.fillStyle = p.color;
       ctx.shadowColor = p.color;
       ctx.shadowBlur = p.matched ? 15 : 9;
@@ -829,7 +990,6 @@
       ctx.arc(outerX, outerY, wheel.pinHeadRadius * p.scale, 0, Math.PI * 2);
       ctx.fill();
 
-      // White ring around matched or obstacle pin head for crisp contrast
       if (p.matched || p.isObstacle) {
         ctx.shadowBlur = 0;
         ctx.lineWidth = 1.6;
@@ -837,7 +997,6 @@
         ctx.stroke();
       }
 
-      // Inner highlight dot
       ctx.shadowBlur = 0;
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
       ctx.beginPath();
@@ -861,7 +1020,6 @@
       ctx.rotate(worldAngle + Math.PI / 2);
       ctx.scale(scale, scale);
 
-      // Draw 5-pointed golden star
       ctx.fillStyle = '#FFCC00';
       ctx.shadowColor = '#FFCC00';
       ctx.shadowBlur = 12;
@@ -892,11 +1050,9 @@
     ctx.translate(wheel.x, wheel.y);
     ctx.rotate(wheel.angle);
 
-    // Outer glow ring
-    ctx.shadowColor = 'rgba(0, 229, 255, 0.35)';
+    ctx.shadowColor = 'rgba(0, 245, 212, 0.35)';
     ctx.shadowBlur = 22;
 
-    // Colorful pie segments
     for (let i = 0; i < segments; i++) {
       ctx.beginPath();
       ctx.moveTo(0, 0);
@@ -905,7 +1061,6 @@
       ctx.fillStyle = wheel.palette[i];
       ctx.fill();
 
-      // Highlight flashed segment on Color Match!
       if (i === wheel.matchedSegmentIdx && wheel.matchFlashAlpha > 0) {
         ctx.save();
         ctx.fillStyle = '#ffffff';
@@ -915,7 +1070,6 @@
       }
     }
 
-    // Crisp rim border
     ctx.shadowBlur = 0;
     ctx.lineWidth = 3.5;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
@@ -923,19 +1077,17 @@
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Inner dark hub
-    ctx.fillStyle = '#121533';
+    ctx.fillStyle = '#0b1830';
     ctx.beginPath();
     ctx.arc(0, 0, r * 0.54, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.lineWidth = 2.5;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+    ctx.strokeStyle = 'rgba(0, 245, 212, 0.32)';
     ctx.stroke();
 
     ctx.restore();
 
-    // Center remaining pins counter (stays upright)
     ctx.save();
     ctx.fillStyle = '#ffffff';
     ctx.font = `900 ${Math.round(r * 0.46)}px system-ui, sans-serif`;
@@ -943,7 +1095,7 @@
     ctx.textBaseline = 'middle';
     ctx.fillText(pinsRemaining, wheel.x, wheel.y - 2);
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.68)';
+    ctx.fillStyle = 'rgba(0, 245, 212, 0.85)';
     ctx.font = `700 ${Math.round(r * 0.145)}px system-ui, sans-serif`;
     ctx.fillText('KALAN İĞNE', wheel.x, wheel.y + r * 0.3);
     ctx.restore();
@@ -979,18 +1131,15 @@
   function drawActiveAndQueuedPins() {
     const launchY = getLaunchY();
 
-    // Draw flying pin if any
     if (activePin) {
       drawSinglePinAt(activePin.x, activePin.y, activePin.color, 1);
     }
 
-    // Draw current ready pin at launch pad
     if (!activePin && pinsRemaining > 0 && gameState === 'PLAYING') {
       const nextColor = getCurrentPinColor();
       drawSinglePinAt(wheel.x, launchY, nextColor, 1);
     }
 
-    // Draw queue indicators below
     const queueStartCount = activePin ? pinsRemaining : pinsRemaining - 1;
     const maxVisibleDots = Math.min(queueStartCount, 7);
     const dotStartY = Math.min(height - 18, launchY + wheel.pinLength + 22);
@@ -1046,50 +1195,69 @@
     scoreSavedForRun = false;
     latestSavedId = null;
 
+    if (saveFeedback) {
+      saveFeedback.style.display = 'none';
+    }
+
     hudScore.textContent = '0';
     updateHudBest();
     configureLevel(1);
 
     mainOverlay.classList.add('hidden');
     gameState = 'PLAYING';
+
+    trackAnalyticsEvent('game_start', {
+      viewport_width: width,
+      viewport_height: height
+    });
   }
 
   function showGameOverModal() {
     modalTitle.textContent = 'OYUN BİTTİ!';
     modalSubtitle.textContent =
       score > 0
-        ? 'Harika atışlardı! Skorunu tabloya kaydedebilir veya hemen yeni oyuna başlayabilirsin.'
+        ? 'Takma adını (nickname) girerek skorunu Küresel İlk 10 tablosuna kaydet!'
         : 'İğneler birbirine çarptı! Kendi rengindeki dilimleri hedefleyerek tekrar dene.';
 
     endStats.style.display = 'grid';
     finalScoreEl.textContent = score;
     finalLevelEl.textContent = level;
 
+    if (saveFeedback) {
+      saveFeedback.style.display = 'none';
+    }
+
     if (score > 0 && !scoreSavedForRun) {
       saveScoreForm.style.display = 'flex';
       const savedName = localStorage.getItem(STORAGE_KEY_LAST_NAME) || '';
       playerNameInput.value = savedName;
+      if (btnSubmitScore) {
+        btnSubmitScore.disabled = false;
+        btnSubmitScore.textContent = 'Skoru Kaydet 🚀';
+      }
     } else {
       saveScoreForm.style.display = 'none';
     }
 
     btnStartGame.textContent = '🔄 TEKRAR OYNA';
-    renderScoreboard();
+    fetchGlobalScores();
     mainOverlay.classList.remove('hidden');
   }
 
   function openScoreboardModal() {
+    trackAnalyticsEvent('leaderboard_view', { current_level: level, current_score: score });
+    fetchGlobalScores();
+
     if (gameState === 'PLAYING') {
       gameState = 'PAUSED';
       modalTitle.textContent = 'OYUN DURAKLATILDI';
-      modalSubtitle.textContent = 'Skor tablosuna göz atıyorsun. Kaldığın yerden devam edebilirsin.';
+      modalSubtitle.textContent = 'Küresel skor tablosuna göz atıyorsun. Kaldığın yerden devam edebilirsin.';
       endStats.style.display = 'none';
       saveScoreForm.style.display = 'none';
+      if (saveFeedback) saveFeedback.style.display = 'none';
       btnStartGame.textContent = '▶ DEVAM ET';
-      renderScoreboard();
       mainOverlay.classList.remove('hidden');
     } else {
-      renderScoreboard();
       mainOverlay.classList.remove('hidden');
     }
   }
@@ -1137,13 +1305,23 @@
     btnSound.textContent = on ? '🔊' : '🔇';
   });
 
-  saveScoreForm.addEventListener('submit', (e) => {
+  saveScoreForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (scoreSavedForRun) return;
     scoreSavedForRun = true;
-    saveScoreEntry(playerNameInput.value, score, level);
+    if (btnSubmitScore) {
+      btnSubmitScore.disabled = true;
+      btnSubmitScore.textContent = 'Kaydediliyor...';
+    }
     saveScoreForm.style.display = 'none';
+    await saveScoreEntry(playerNameInput.value, score, level);
   });
+
+  if (btnRefreshScores) {
+    btnRefreshScores.addEventListener('click', () => {
+      fetchGlobalScores();
+    });
+  }
 
   btnClearScores.addEventListener('click', () => {
     localStorage.removeItem(STORAGE_KEY_SCORES);
@@ -1168,5 +1346,6 @@
   configureLevel(1);
   renderScoreboard();
   updateHudBest();
+  fetchGlobalScores();
   requestAnimationFrame(loop);
 })();
