@@ -25,15 +25,15 @@
   const btnSound = document.getElementById('btnSound');
   const btnClearScores = document.getElementById('btnClearScores');
 
-  // Constants & Palettes
+  // Constants & Palettes (6 distinct vibrant colors per palette for clear color-matching)
   const STORAGE_KEY_SCORES = 'renkli_cark_leaderboard_v1';
   const STORAGE_KEY_LAST_NAME = 'renkli_cark_player_name';
 
   const WHEEL_PALETTES = [
-    ['#FF3366', '#FF9933', '#FFCC00', '#33CC66', '#00E5FF', '#7C4DFF', '#FF66B2', '#00E676'],
-    ['#00F5D4', '#00BBF9', '#FEE440', '#F15BB5', '#9B5DE5', '#FF6B6B', '#4ECDC4', '#FFE66D'],
-    ['#FF595E', '#FFCA3A', '#8AC926', '#1982C4', '#6A4C93', '#FF924C', '#52B788', '#3A86FF'],
-    ['#F72585', '#B5179E', '#7209B7', '#4361EE', '#4CC9F0', '#06D6A0', '#FFD166', '#EF476F']
+    ['#FF3366', '#FF9933', '#FFCC00', '#00E676', '#00E5FF', '#9B5DE5'],
+    ['#F72585', '#FF9E00', '#FEE440', '#06D6A0', '#00BBF9', '#7209B7'],
+    ['#FF595E', '#FF924C', '#FFCA3A', '#8AC926', '#1982C4', '#6A4C93'],
+    ['#EF476F', '#F78C6B', '#FFD166', '#06D6A0', '#118AB2', '#8338EC']
   ];
 
   // Sound Synthesizer (Web Audio API)
@@ -83,12 +83,18 @@
     }
 
     throwPin() {
-      this.playTone(320, 'triangle', 0.08, 0.12, 620);
+      this.playTone(320, 'triangle', 0.08, 0.11, 600);
     }
 
     pinHit(combo = 1) {
-      const base = Math.min(260 + combo * 35, 780);
-      this.playTone(base, 'sine', 0.11, 0.18, base * 1.35);
+      const base = Math.min(260 + combo * 30, 720);
+      this.playTone(base, 'sine', 0.11, 0.16, base * 1.3);
+    }
+
+    colorMatch(streak = 1) {
+      const root = Math.min(440 + streak * 40, 880);
+      this.playTone(root, 'triangle', 0.14, 0.2, root * 1.25);
+      setTimeout(() => this.playTone(root * 1.5, 'sine', 0.18, 0.22, root * 2), 55);
     }
 
     starHit() {
@@ -119,6 +125,7 @@
   let score = 0;
   let level = 1;
   let combo = 0;
+  let colorMatchStreak = 0;
   let lastThrowTime = 0;
   let scoreSavedForRun = false;
   let latestSavedId = null;
@@ -127,21 +134,24 @@
   let wheel = {
     x: 0,
     y: 0,
-    radius: 75,
-    pinLength: 62,
-    pinHeadRadius: 9,
+    radius: 72,
+    pinLength: 56,
+    pinHeadRadius: 8,
     angle: 0,
-    baseSpeed: 0.025,
-    currentSpeed: 0.025,
+    baseSpeed: 0.015,
+    currentSpeed: 0.015,
     direction: 1,
     pattern: 'STEADY',
     patternTimer: 0,
     pulseScale: 1,
-    palette: WHEEL_PALETTES[0]
+    palette: WHEEL_PALETTES[0],
+    matchedSegmentIdx: -1,
+    matchFlashAlpha: 0
   };
 
-  let stuckPins = []; // { angle, color, isObstacle, scale }
+  let stuckPins = []; // { angle, color, isObstacle, scale, matched }
   let bonusStars = []; // { angle, hit, pulse }
+  let pinQueueColors = []; // Pre-generated colors for remaining pins
   let activePin = null; // { x, y, vy, color }
   let pinsRemaining = 0;
   let totalPinsForLevel = 0;
@@ -222,104 +232,38 @@
     }[m]));
   }
 
-  // Responsive Canvas Setup
+  // Responsive Fullscreen Canvas Setup
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
-    width = rect.width;
-    height = rect.height;
+    width = rect.width || window.innerWidth;
+    height = rect.height || window.innerHeight;
     dpr = Math.min(window.devicePixelRatio || 1, 2.5);
 
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    // Calculate vertical safe zones so wheel + pins + launch pad fit any mobile screen
+    const topHudBottom = 104;
+    const usableHeight = Math.max(320, height - topHudBottom);
+    const minDim = Math.min(width, usableHeight * 0.92);
+
+    wheel.radius = Math.max(48, Math.min(78, minDim * 0.165));
+    wheel.pinLength = Math.max(40, Math.min(62, minDim * 0.132));
+    wheel.pinHeadRadius = Math.max(6.5, Math.min(8.8, minDim * 0.0185));
+
     wheel.x = width / 2;
-    wheel.y = Math.min(height * 0.36, 265);
-    const minDim = Math.min(width, height);
-    wheel.radius = Math.max(56, Math.min(82, minDim * 0.175));
-    wheel.pinLength = Math.max(48, Math.min(68, minDim * 0.145));
-    wheel.pinHeadRadius = Math.max(7.5, Math.min(10, minDim * 0.021));
+    const minWheelY = topHudBottom + wheel.radius + wheel.pinLength + 16;
+    const idealWheelY = topHudBottom + usableHeight * 0.34;
+    wheel.y = Math.max(minWheelY, idealWheelY);
   }
 
   window.addEventListener('resize', resizeCanvas);
-
-  // Progressive Difficulty Configuration per Level
-  function configureLevel(lvl) {
-    wheel.palette = WHEEL_PALETTES[(lvl - 1) % WHEEL_PALETTES.length];
-    wheel.patternTimer = 0;
-
-    // Determine pattern & speed scaling
-    const isBoss = lvl % 5 === 0;
-    let patternName = 'Sabit Dönüş';
-
-    if (lvl === 1) {
-      wheel.pattern = 'STEADY';
-      wheel.baseSpeed = 0.024;
-      wheel.direction = 1;
-      patternName = 'Sabit Dönüş';
-    } else if (lvl === 2) {
-      wheel.pattern = 'STEADY';
-      wheel.baseSpeed = 0.031;
-      wheel.direction = -1;
-      patternName = 'Ters Yön • Hızlı';
-    } else if (isBoss) {
-      wheel.pattern = 'BOSS_CHAOS';
-      wheel.baseSpeed = Math.min(0.036 + lvl * 0.0018, 0.068);
-      wheel.direction = 1;
-      patternName = '🔥 BOSS SEVİYESİ • Ani Yön & Hız';
-    } else if (lvl % 4 === 0) {
-      wheel.pattern = 'STOP_AND_GO';
-      wheel.baseSpeed = Math.min(0.034 + lvl * 0.0016, 0.065);
-      patternName = '⚡ Dur - Kalk Ritmi';
-    } else if (lvl % 3 === 0) {
-      wheel.pattern = 'REVERSE_PULSE';
-      wheel.baseSpeed = Math.min(0.03 + lvl * 0.0017, 0.062);
-      patternName = '🔄 Çift Yönlü Salınım';
-    } else {
-      wheel.pattern = 'WAVE_SPEED';
-      wheel.baseSpeed = Math.min(0.028 + lvl * 0.0018, 0.064);
-      wheel.direction = lvl % 2 === 0 ? 1 : -1;
-      patternName = '🌊 Dalgalı Hızlanma';
-    }
-
-    difficultyBanner.textContent = `Seviye ${lvl} • ${patternName}`;
-
-    // Number of pre-stuck obstacle pins
-    stuckPins = [];
-    const obstacleCount = lvl === 1 ? 2 : Math.min(2 + Math.floor(lvl * 0.85), 11);
-    for (let i = 0; i < obstacleCount; i++) {
-      const angle = (Math.PI * 2 * i) / obstacleCount + (Math.random() * 0.14 - 0.07);
-      stuckPins.push({
-        angle: normalizeAngle(angle),
-        color: '#90a4ae',
-        isObstacle: true,
-        scale: 1
-      });
-    }
-
-    // Bonus stars on wheel circumference (between obstacle pins)
-    bonusStars = [];
-    const starCount = lvl >= 2 ? Math.min(1 + Math.floor(lvl / 3), 3) : 1;
-    for (let s = 0; s < starCount; s++) {
-      const candidateAngle = normalizeAngle(((s + 0.5) * Math.PI * 2) / starCount);
-      const tooClose = stuckPins.some((p) => angularDistance(p.angle, candidateAngle) < 0.26);
-      if (!tooClose) {
-        bonusStars.push({
-          angle: candidateAngle,
-          hit: false,
-          pulse: Math.random() * Math.PI * 2
-        });
-      }
-    }
-
-    // Pins player must throw
-    totalPinsForLevel = Math.min(6 + Math.floor(lvl * 1.15), 18);
-    pinsRemaining = totalPinsForLevel;
-    activePin = null;
-
-    hudLevel.textContent = lvl;
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', resizeCanvas);
   }
 
+  // Angle & Color Helpers
   function normalizeAngle(a) {
     const twoPi = Math.PI * 2;
     return ((a % twoPi) + twoPi) % twoPi;
@@ -330,12 +274,115 @@
     return Math.min(diff, Math.PI * 2 - diff);
   }
 
-  function getNextPinColor(index) {
-    return wheel.palette[index % wheel.palette.length];
+  function getSegmentIndexAtAngle(relativeAngle) {
+    const segments = wheel.palette.length;
+    const arcStep = (Math.PI * 2) / segments;
+    const norm = normalizeAngle(relativeAngle);
+    return Math.floor(norm / arcStep) % segments;
+  }
+
+  function getSegmentColorAtAngle(relativeAngle) {
+    return wheel.palette[getSegmentIndexAtAngle(relativeAngle)];
+  }
+
+  // Balanced & Gradual Progressive Difficulty Configuration
+  function configureLevel(lvl) {
+    wheel.palette = WHEEL_PALETTES[(lvl - 1) % WHEEL_PALETTES.length];
+    wheel.patternTimer = 0;
+    wheel.matchedSegmentIdx = -1;
+    wheel.matchFlashAlpha = 0;
+
+    // Gentle speed progression: starts at 0.015 and rises slowly (+0.00105 per level, max 0.035)
+    const gentleBase = Math.min(0.0145 + (lvl - 1) * 0.00105, 0.035);
+    wheel.baseSpeed = gentleBase;
+
+    const isBoss = lvl % 5 === 0;
+    let patternName = 'Rahat Dönüş';
+
+    if (lvl <= 2) {
+      wheel.pattern = 'STEADY';
+      wheel.direction = lvl === 1 ? 1 : -1;
+      patternName = lvl === 1 ? 'Rahat Dönüş' : 'Ters Yön • Dengeli';
+    } else if (lvl <= 4) {
+      wheel.pattern = 'GENTLE_WAVE';
+      wheel.direction = lvl % 2 === 1 ? 1 : -1;
+      patternName = '🌊 Yumuşak Tempo';
+    } else if (isBoss) {
+      wheel.pattern = 'BOSS_RHYTHM';
+      wheel.direction = 1;
+      patternName = '👑 ÖZEL SEVİYE • Renk Avı';
+    } else if (lvl % 4 === 0) {
+      wheel.pattern = 'BREATHE_PACE';
+      wheel.direction = lvl % 8 === 0 ? -1 : 1;
+      patternName = '⚡ Yavaşla - Hızlan';
+    } else if (lvl % 3 === 0) {
+      wheel.pattern = 'SLOW_SWING';
+      wheel.direction = 1;
+      patternName = '🔄 Yumuşak Salınım';
+    } else {
+      wheel.pattern = 'GENTLE_WAVE';
+      wheel.direction = lvl % 2 === 0 ? 1 : -1;
+      patternName = '🌊 Dengeli Akış';
+    }
+
+    difficultyBanner.textContent = `Seviye ${lvl} • ${patternName}`;
+
+    // Pre-stuck pins: starts with just 1 pin on Level 1, grows very gradually up to max 6
+    stuckPins = [];
+    const obstacleCount = lvl === 1 ? 1 : Math.min(1 + Math.floor(lvl / 2.4), 6);
+    for (let i = 0; i < obstacleCount; i++) {
+      const rawAngle = (Math.PI * 2 * i) / obstacleCount + 0.25;
+      const angle = normalizeAngle(rawAngle);
+      // Color obstacle pins with the slice color they sit on so players can also color-match with them!
+      const sliceCol = getSegmentColorAtAngle(angle);
+      stuckPins.push({
+        angle,
+        color: sliceCol,
+        isObstacle: true,
+        scale: 1,
+        matched: false
+      });
+    }
+
+    // Bonus stars on wheel circumference (between obstacle pins)
+    bonusStars = [];
+    const starCount = isBoss ? 3 : lvl >= 2 ? Math.min(1 + Math.floor(lvl / 4), 2) : 1;
+    for (let s = 0; s < starCount; s++) {
+      const candidateAngle = normalizeAngle(((s + 0.5) * Math.PI * 2) / starCount);
+      const tooClose = stuckPins.some((p) => angularDistance(p.angle, candidateAngle) < 0.32);
+      if (!tooClose) {
+        bonusStars.push({
+          angle: candidateAngle,
+          hit: false,
+          pulse: Math.random() * Math.PI * 2
+        });
+      }
+    }
+
+    // Pins player must throw: starts at 5, grows slowly (~1 extra pin every 2 levels, max 12)
+    totalPinsForLevel = Math.min(5 + Math.floor((lvl - 1) * 0.55), 12);
+    pinsRemaining = totalPinsForLevel;
+    activePin = null;
+
+    // Build queue of pin colors from current palette so every pin has a matching target on the wheel
+    pinQueueColors = [];
+    for (let i = 0; i < totalPinsForLevel; i++) {
+      pinQueueColors.push(wheel.palette[i % wheel.palette.length]);
+    }
+
+    hudLevel.textContent = lvl;
+  }
+
+  function getCurrentPinColor() {
+    const idx = totalPinsForLevel - pinsRemaining;
+    return pinQueueColors[idx] || wheel.palette[idx % wheel.palette.length];
   }
 
   function getLaunchY() {
-    return height - Math.max(95, height * 0.15);
+    const bottomSpace = Math.max(76, height * 0.13);
+    const maxLaunchY = height - wheel.pinLength - 34;
+    const minLaunchY = wheel.y + wheel.radius + wheel.pinLength + 38;
+    return Math.max(minLaunchY, Math.min(height - bottomSpace, maxLaunchY));
   }
 
   // Action: Throw Pin
@@ -343,12 +390,11 @@
     if (gameState !== 'PLAYING') return;
     if (activePin || pinsRemaining <= 0) return;
 
-    const colorIdx = totalPinsForLevel - pinsRemaining;
     activePin = {
       x: wheel.x,
       y: getLaunchY(),
-      vy: -Math.max(1150, height * 1.85), // pixels per second
-      color: getNextPinColor(colorIdx)
+      vy: -Math.max(1150, height * 1.9), // fast, crisp throw
+      color: getCurrentPinColor()
     };
     sfx.throwPin();
   }
@@ -378,7 +424,7 @@
       text,
       color,
       size,
-      vy: -65,
+      vy: -62,
       alpha: 1
     });
   }
@@ -398,6 +444,7 @@
     // Screen Shake & Flash decay
     if (shakeTime > 0) shakeTime = Math.max(0, shakeTime - dt);
     if (flashAlpha > 0) flashAlpha = Math.max(0, flashAlpha - dt * 1.5);
+    if (wheel.matchFlashAlpha > 0) wheel.matchFlashAlpha = Math.max(0, wheel.matchFlashAlpha - dt * 1.8);
     wheel.pulseScale += (1 - wheel.pulseScale) * Math.min(1, dt * 14);
 
     // Update particles
@@ -405,7 +452,7 @@
       const p = particles[i];
       p.x += p.vx * dt;
       p.y += p.vy * dt;
-      p.vy += 240 * dt; // subtle gravity
+      p.vy += 240 * dt;
       p.alpha -= p.decay * dt;
       if (p.alpha <= 0) particles.splice(i, 1);
     }
@@ -414,17 +461,16 @@
     for (let i = floatingTexts.length - 1; i >= 0; i--) {
       const ft = floatingTexts[i];
       ft.y += ft.vy * dt;
-      ft.alpha -= 1.15 * dt;
+      ft.alpha -= 1.1 * dt;
       if (ft.alpha <= 0) floatingTexts.splice(i, 1);
     }
 
     if (gameState !== 'PLAYING' && gameState !== 'LEVEL_CLEAR') {
-      // Gentle idle rotation on menu
-      wheel.angle = normalizeAngle(wheel.angle + 0.8 * dt);
+      wheel.angle = normalizeAngle(wheel.angle + 0.65 * dt);
       return;
     }
 
-    // Dynamic Wheel Rotation Patterns
+    // Smooth, Balanced Wheel Rotation Patterns
     wheel.patternTimer += dt;
     const baseRadPerSec = wheel.baseSpeed * 60;
 
@@ -432,25 +478,24 @@
       case 'STEADY':
         wheel.currentSpeed = baseRadPerSec * wheel.direction;
         break;
-      case 'WAVE_SPEED': {
-        const wave = 0.55 + 0.75 * Math.sin(wheel.patternTimer * 2.4);
+      case 'GENTLE_WAVE': {
+        const wave = 0.82 + 0.28 * Math.sin(wheel.patternTimer * 1.6);
         wheel.currentSpeed = baseRadPerSec * wave * wheel.direction;
         break;
       }
-      case 'REVERSE_PULSE': {
-        const osc = Math.sin(wheel.patternTimer * 1.45);
-        wheel.currentSpeed = baseRadPerSec * 1.25 * osc;
+      case 'SLOW_SWING': {
+        const osc = Math.sin(wheel.patternTimer * 0.95);
+        wheel.currentSpeed = baseRadPerSec * 1.05 * osc;
         break;
       }
-      case 'STOP_AND_GO': {
-        const cycle = wheel.patternTimer % 2.2;
-        const factor = cycle < 0.45 ? 0.08 : 1.35;
+      case 'BREATHE_PACE': {
+        const factor = 0.68 + 0.45 * Math.cos(wheel.patternTimer * 1.8);
         wheel.currentSpeed = baseRadPerSec * factor * wheel.direction;
         break;
       }
-      case 'BOSS_CHAOS': {
-        const swing = Math.sin(wheel.patternTimer * 2.1) + 0.6 * Math.cos(wheel.patternTimer * 3.7);
-        wheel.currentSpeed = baseRadPerSec * 0.95 * swing;
+      case 'BOSS_RHYTHM': {
+        const swing = 0.85 * Math.sin(wheel.patternTimer * 1.25) + 0.35 * Math.cos(wheel.patternTimer * 2.1);
+        wheel.currentSpeed = baseRadPerSec * swing;
         break;
       }
     }
@@ -468,13 +513,13 @@
 
       const targetTipY = wheel.y + wheel.radius;
       if (activePin.y <= targetTipY) {
-        // Pin reached wheel rim! Check collision at bottom (angle = PI / 2 in canvas coordinates)
+        // Pin reached wheel rim at bottom (angle = PI / 2 in canvas coordinates)
         const hitWorldAngle = Math.PI / 2;
         const relativeAngle = normalizeAngle(hitWorldAngle - wheel.angle);
 
-        // Collision threshold based on pin head radius & cord length at outer pin head
+        // Forgiving collision threshold so close shots feel fair
         const outerRadius = wheel.radius + wheel.pinLength;
-        const minSafeAngle = (wheel.pinHeadRadius * 2.05) / outerRadius;
+        const minSafeAngle = (wheel.pinHeadRadius * 1.72) / outerRadius;
 
         let collidedPin = null;
         for (const p of stuckPins) {
@@ -485,10 +530,8 @@
         }
 
         if (collidedPin) {
-          // Collision! Game Over
           handleCollision(collidedPin);
         } else {
-          // Successful Pin Stick!
           handlePinSuccess(relativeAngle, activePin.color);
         }
       }
@@ -502,18 +545,32 @@
 
     // Combo calculation (fast consecutive throws increase combo)
     const now = performance.now();
-    if (now - lastThrowTime < 950) {
+    if (now - lastThrowTime < 1200) {
       combo = Math.min(combo + 1, 8);
     } else {
       combo = 1;
     }
     lastThrowTime = now;
 
+    // Color Match Check:
+    // 1. Does the pin color match the wheel segment color where it landed?
+    const landedSegmentIdx = getSegmentIndexAtAngle(relativeAngle);
+    const landedSegmentColor = wheel.palette[landedSegmentIdx];
+    const isSliceMatch = landedSegmentColor.toLowerCase() === color.toLowerCase();
+
+    // 2. Did it land right next to another pin of the same color?
+    const isNeighborPinMatch = stuckPins.some(
+      (p) => p.color.toLowerCase() === color.toLowerCase() && angularDistance(p.angle, relativeAngle) < 0.42
+    );
+
+    const isColorMatched = isSliceMatch || isNeighborPinMatch;
+
     stuckPins.push({
       angle: relativeAngle,
       color,
       isObstacle: false,
-      scale: 1.35
+      scale: isColorMatched ? 1.5 : 1.32,
+      matched: isColorMatched
     });
 
     const impactX = wheel.x;
@@ -522,28 +579,52 @@
     // Check bonus star hit
     let starBonus = 0;
     for (const star of bonusStars) {
-      if (!star.hit && angularDistance(star.angle, relativeAngle) < 0.24) {
+      if (!star.hit && angularDistance(star.angle, relativeAngle) < 0.26) {
         star.hit = true;
         starBonus = 25 * level;
         sfx.starHit();
         spawnParticles(impactX, impactY, '#FFCC00', 26, 1.3);
-        spawnFloatingText(impactX + 28, impactY + 10, `⭐ +${starBonus}`, '#FFCC00', 20);
+        spawnFloatingText(impactX, impactY - 12, `⭐ +${starBonus}`, '#FFCC00', 19);
       }
     }
 
     const basePoints = 10 * level + (combo > 1 ? (combo - 1) * 5 : 0);
-    const totalEarned = basePoints + starBonus;
+    let colorBonus = 0;
+
+    if (isColorMatched) {
+      colorMatchStreak++;
+      const multiplier = isSliceMatch && isNeighborPinMatch ? 2.5 : 2;
+      colorBonus = Math.round(basePoints * (multiplier - 1)) + colorMatchStreak * 5 * level;
+
+      wheel.matchedSegmentIdx = landedSegmentIdx;
+      wheel.matchFlashAlpha = 1;
+
+      if (starBonus === 0) {
+        sfx.colorMatch(colorMatchStreak);
+      }
+      spawnParticles(impactX, impactY, color, 26, 1.25);
+    } else {
+      colorMatchStreak = 0;
+      if (starBonus === 0) {
+        sfx.pinHit(combo);
+      }
+      spawnParticles(impactX, impactY, color, 14, 0.9);
+    }
+
+    const totalEarned = basePoints + colorBonus + starBonus;
     score += totalEarned;
     hudScore.textContent = score;
     updateHudBest();
 
-    if (starBonus === 0) {
-      sfx.pinHit(combo);
+    if (isSliceMatch && isNeighborPinMatch) {
+      spawnFloatingText(impactX, impactY + 28, `🌈 SÜPER RENK UYUMU! +${basePoints + colorBonus}`, color, 20);
+    } else if (isColorMatched) {
+      const streakTxt = colorMatchStreak > 1 ? ` (Seri x${colorMatchStreak})` : '';
+      spawnFloatingText(impactX, impactY + 28, `🎨 RENK UYUMU! x2 +${basePoints + colorBonus}${streakTxt}`, color, 19);
+    } else {
+      const comboText = combo > 1 ? `🔥 x${combo} (+${basePoints})` : `+${basePoints}`;
+      spawnFloatingText(impactX, impactY + 26, comboText, '#ffffff', combo > 1 ? 18 : 16);
     }
-
-    spawnParticles(impactX, impactY, color, 14, 0.9);
-    const comboText = combo > 1 ? `🔥 x${combo} (+${basePoints})` : `+${basePoints}`;
-    spawnFloatingText(impactX, impactY + 28, comboText, color, combo > 1 ? 19 : 16);
 
     // Check Level Clear
     if (pinsRemaining <= 0) {
@@ -554,9 +635,9 @@
       updateHudBest();
 
       sfx.levelUp();
-      triggerFlash('#00e676', 0.32);
+      triggerFlash('#00e676', 0.3);
       spawnParticles(wheel.x, wheel.y, '#00e676', 40, 1.5);
-      spawnFloatingText(wheel.x, wheel.y, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00e676', 22);
+      spawnFloatingText(wheel.x, wheel.y, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00e676', 21);
 
       setTimeout(() => {
         if (gameState === 'LEVEL_CLEAR') {
@@ -597,7 +678,7 @@
       ctx.translate(dx, dy);
     }
 
-    // Subtle decorative background rings
+    // Subtle decorative background rings & color-match aim guide
     drawBackgroundDecor();
 
     // Draw Stuck Pins (behind the wheel rim)
@@ -636,19 +717,45 @@
     ctx.arc(wheel.x, wheel.y, outerOrbit, 0, Math.PI * 2);
     ctx.stroke();
 
+    // Check if current bottom wheel segment matches the ready pin's color
+    const currentReadyColor = getCurrentPinColor();
+    const bottomRelativeAngle = normalizeAngle(Math.PI / 2 - wheel.angle);
+    const bottomSliceColor = getSegmentColorAtAngle(bottomRelativeAngle);
+    const isTargetMatchingNow =
+      gameState === 'PLAYING' &&
+      pinsRemaining > 0 &&
+      currentReadyColor &&
+      bottomSliceColor.toLowerCase() === currentReadyColor.toLowerCase();
+
     // Aim guide line from launch zone to wheel bottom
     ctx.setLineDash([5, 7]);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.strokeStyle = isTargetMatchingNow ? currentReadyColor : 'rgba(255, 255, 255, 0.14)';
+    ctx.lineWidth = isTargetMatchingNow ? 2.5 : 1.5;
     ctx.beginPath();
-    ctx.moveTo(wheel.x, wheel.y + wheel.radius + 10);
-    ctx.lineTo(wheel.x, getLaunchY() - 20);
+    ctx.moveTo(wheel.x, wheel.y + wheel.radius + 8);
+    ctx.lineTo(wheel.x, getLaunchY() - 14);
     ctx.stroke();
+
+    // Target zone indicator on bottom rim of wheel
+    ctx.setLineDash([]);
+    const targetY = wheel.y + wheel.radius + 6;
+    ctx.fillStyle = isTargetMatchingNow ? currentReadyColor : 'rgba(255, 255, 255, 0.35)';
+    if (isTargetMatchingNow) {
+      ctx.shadowColor = currentReadyColor;
+      ctx.shadowBlur = 12;
+    }
+    ctx.beginPath();
+    ctx.moveTo(wheel.x, targetY - 3);
+    ctx.lineTo(wheel.x - 6, targetY + 6);
+    ctx.lineTo(wheel.x + 6, targetY + 6);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
   function drawStuckPins() {
     for (const p of stuckPins) {
-      p.scale += (1 - p.scale) * 0.2;
+      p.scale += (1 - p.scale) * 0.18;
       const worldAngle = wheel.angle + p.angle;
       const cos = Math.cos(worldAngle);
       const sin = Math.sin(worldAngle);
@@ -661,8 +768,8 @@
 
       // Pin shaft
       ctx.save();
-      ctx.strokeStyle = p.isObstacle ? 'rgba(207, 216, 220, 0.85)' : '#ffffff';
-      ctx.lineWidth = 3.2;
+      ctx.strokeStyle = p.matched ? p.color : p.isObstacle ? 'rgba(225, 232, 238, 0.85)' : '#ffffff';
+      ctx.lineWidth = p.matched ? 3.8 : 3.2;
       ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(innerX, innerY);
@@ -672,16 +779,24 @@
       // Pin colorful head
       ctx.fillStyle = p.color;
       ctx.shadowColor = p.color;
-      ctx.shadowBlur = p.isObstacle ? 0 : 10;
+      ctx.shadowBlur = p.matched ? 15 : 9;
       ctx.beginPath();
       ctx.arc(outerX, outerY, wheel.pinHeadRadius * p.scale, 0, Math.PI * 2);
       ctx.fill();
+
+      // White ring around matched or obstacle pin head for crisp contrast
+      if (p.matched || p.isObstacle) {
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = p.matched ? '#ffffff' : 'rgba(255, 255, 255, 0.65)';
+        ctx.stroke();
+      }
 
       // Inner highlight dot
       ctx.shadowBlur = 0;
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
       ctx.beginPath();
-      ctx.arc(outerX - 2.2, outerY - 2.2, wheel.pinHeadRadius * 0.32, 0, Math.PI * 2);
+      ctx.arc(outerX - 2, outerY - 2, wheel.pinHeadRadius * 0.3, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
@@ -691,7 +806,7 @@
     for (const star of bonusStars) {
       if (star.hit) continue;
       const worldAngle = wheel.angle + star.angle;
-      const dist = wheel.radius + 18;
+      const dist = wheel.radius + 17;
       const sx = wheel.x + Math.cos(worldAngle) * dist;
       const sy = wheel.y + Math.sin(worldAngle) * dist;
       const scale = 1 + 0.15 * Math.sin(star.pulse);
@@ -707,8 +822,8 @@
       ctx.shadowBlur = 12;
       ctx.beginPath();
       const spikes = 5;
-      const outerR = 10;
-      const innerR = 4.8;
+      const outerR = 9.5;
+      const innerR = 4.5;
       for (let i = 0; i < spikes * 2; i++) {
         const r = i % 2 === 0 ? outerR : innerR;
         const a = (i * Math.PI) / spikes - Math.PI / 2;
@@ -744,11 +859,20 @@
       ctx.closePath();
       ctx.fillStyle = wheel.palette[i];
       ctx.fill();
+
+      // Highlight flashed segment on Color Match!
+      if (i === wheel.matchedSegmentIdx && wheel.matchFlashAlpha > 0) {
+        ctx.save();
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = wheel.matchFlashAlpha * 0.55;
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
     // Crisp rim border
     ctx.shadowBlur = 0;
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 3.5;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -757,7 +881,7 @@
     // Inner dark hub
     ctx.fillStyle = '#121533';
     ctx.beginPath();
-    ctx.arc(0, 0, r * 0.56, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 0.54, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.lineWidth = 2.5;
@@ -769,14 +893,14 @@
     // Center remaining pins counter (stays upright)
     ctx.save();
     ctx.fillStyle = '#ffffff';
-    ctx.font = `900 ${Math.round(r * 0.48)}px system-ui, sans-serif`;
+    ctx.font = `900 ${Math.round(r * 0.46)}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(pinsRemaining, wheel.x, wheel.y - 3);
+    ctx.fillText(pinsRemaining, wheel.x, wheel.y - 2);
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
-    ctx.font = `700 ${Math.round(r * 0.15)}px system-ui, sans-serif`;
-    ctx.fillText('KALAN İĞNE', wheel.x, wheel.y + r * 0.31);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.68)';
+    ctx.font = `700 ${Math.round(r * 0.145)}px system-ui, sans-serif`;
+    ctx.fillText('KALAN İĞNE', wheel.x, wheel.y + r * 0.3);
     ctx.restore();
   }
 
@@ -785,8 +909,8 @@
     ctx.globalAlpha = alpha;
 
     const headY = tipY + wheel.pinLength;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3.5;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(x, tipY);
@@ -795,16 +919,15 @@
 
     ctx.fillStyle = color;
     ctx.shadowColor = color;
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = 14;
     ctx.beginPath();
-    ctx.arc(x, headY, wheel.pinHeadRadius, 0, Math.PI * 2);
+    ctx.arc(x, headY, wheel.pinHeadRadius * 1.12, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.shadowBlur = 0;
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '800 10px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -818,25 +941,25 @@
 
     // Draw current ready pin at launch pad
     if (!activePin && pinsRemaining > 0 && gameState === 'PLAYING') {
-      const nextColor = getNextPinColor(totalPinsForLevel - pinsRemaining);
+      const nextColor = getCurrentPinColor();
       drawSinglePinAt(wheel.x, launchY, nextColor, 1);
     }
 
     // Draw queue indicators below
     const queueStartCount = activePin ? pinsRemaining : pinsRemaining - 1;
     const maxVisibleDots = Math.min(queueStartCount, 7);
-    const dotStartY = launchY + wheel.pinLength + 24;
+    const dotStartY = Math.min(height - 18, launchY + wheel.pinLength + 22);
 
     for (let i = 0; i < maxVisibleDots; i++) {
       const colorIdx = totalPinsForLevel - queueStartCount + i;
-      const col = getNextPinColor(colorIdx);
-      const offsetX = (i - (maxVisibleDots - 1) / 2) * 20;
+      const col = pinQueueColors[colorIdx] || wheel.palette[colorIdx % wheel.palette.length];
+      const offsetX = (i - (maxVisibleDots - 1) / 2) * 19;
 
       ctx.save();
       ctx.fillStyle = col;
-      ctx.globalAlpha = 0.85 - i * 0.08;
+      ctx.globalAlpha = 0.88 - i * 0.08;
       ctx.beginPath();
-      ctx.arc(wheel.x + offsetX, dotStartY, 6, 0, Math.PI * 2);
+      ctx.arc(wheel.x + offsetX, dotStartY, 5.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
@@ -861,7 +984,7 @@
       ctx.font = `800 ${ft.size}px system-ui, sans-serif`;
       ctx.fillStyle = ft.color;
       ctx.textAlign = 'center';
-      ctx.shadowColor = 'rgba(0,0,0,0.65)';
+      ctx.shadowColor = 'rgba(0,0,0,0.75)';
       ctx.shadowBlur = 6;
       ctx.fillText(ft.text, ft.x, ft.y);
       ctx.restore();
@@ -874,6 +997,7 @@
     score = 0;
     level = 1;
     combo = 0;
+    colorMatchStreak = 0;
     scoreSavedForRun = false;
     latestSavedId = null;
 
@@ -889,8 +1013,8 @@
     modalTitle.textContent = 'OYUN BİTTİ!';
     modalSubtitle.textContent =
       score > 0
-        ? 'Harika refleksti! Skorunu tabloya kaydedebilir veya hemen yeni oyuna başlayabilirsin.'
-        : 'İğneler birbirine çarptı! Tekrar denemeye hazır mısın?';
+        ? 'Harika atışlardı! Skorunu tabloya kaydedebilir veya hemen yeni oyuna başlayabilirsin.'
+        : 'İğneler birbirine çarptı! Kendi rengindeki dilimleri hedefleyerek tekrar dene.';
 
     endStats.style.display = 'grid';
     finalScoreEl.textContent = score;
