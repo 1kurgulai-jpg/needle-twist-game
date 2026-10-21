@@ -34,21 +34,23 @@
   const btnSound = document.getElementById('btnSound');
   const btnRefreshScores = document.getElementById('btnRefreshScores');
 
-  // Storage & Cloud Leaderboard Endpoints
-  const STORAGE_KEY_SCORES = 'renkli_cark_leaderboard_v2';
-  const STORAGE_KEY_LAST_NAME = 'renkli_cark_player_name';
+  // Storage & Cloud Leaderboard Endpoints (Yeni Dönem: Tertemiz Tablo & Cihaz Başına Tek Kullanıcı/Rekor)
+  const STORAGE_KEY_SCORES = 'renkli_cark_leaderboard_v3_clean';
+  const STORAGE_KEY_LOCKED_NAME = 'renkli_cark_locked_name_v3_clean';
+  const STORAGE_KEY_DEVICE_ID = 'renkli_cark_device_id_v3';
   const FIREBASE_DB_URL = window.FIREBASE_DB_URL || '';
-  const CLOUD_LEADERBOARD_TOPIC = 'needle_twist_leaderboard_1kurgulai_v1';
+  const CLOUD_LEADERBOARD_TOPIC = 'needle_twist_leaderboard_1kurgulai_v3_clean';
   const CLOUD_LEADERBOARD_URL = `https://ntfy.sh/${CLOUD_LEADERBOARD_TOPIC}`;
 
-  // Başlangıç küresel rekabet tablosu (Bulut verileriyle birleştirilir)
-  const SEED_GLOBAL_SCORES = [
-    { id: 'seed-1', name: 'TurkuazUsta', score: 580, level: 6, date: '20.10.2026' },
-    { id: 'seed-2', name: 'CarkAvcisi', score: 440, level: 5, date: '20.10.2026' },
-    { id: 'seed-3', name: 'RenkKeskin', score: 310, level: 4, date: '20.10.2026' },
-    { id: 'seed-4', name: 'NeonRefleks', score: 220, level: 3, date: '20.10.2026' },
-    { id: 'seed-5', name: 'IgneBeyi', score: 140, level: 2, date: '20.10.2026' }
-  ];
+  // Eski dönem skor tablosu verilerini temizle (Tertemiz yeni dönem başlangıcı)
+  const SEED_GLOBAL_SCORES = [];
+  try {
+    localStorage.removeItem('renkli_cark_leaderboard_v1');
+    localStorage.removeItem('renkli_cark_leaderboard_v2');
+    localStorage.removeItem('renkli_cark_player_name');
+  } catch {
+    // ignore storage errors
+  }
 
   // Google Analytics (GA4) Yardımcı Fonksiyonu
   function trackAnalyticsEvent(eventName, params = {}) {
@@ -323,7 +325,7 @@
   let flashColor = null;
   let flashAlpha = 0;
 
-  // Benzersiz Kullanıcı Adı (Nickname) Normalizasyonu
+  // Benzersiz Kullanıcı Adı (Nickname) Normalizasyonu & Cihaz Başına Tek Kullanıcı Kilidi
   function normalizePlayerKey(name) {
     return (
       String(name || 'Oyuncu')
@@ -333,7 +335,41 @@
     );
   }
 
-  // Küresel & Yerel Skor Tablosu Yönetimi (Benzersiz İsim & En Yüksek Rekor Mantığı)
+  function getDeviceId() {
+    try {
+      let devId = localStorage.getItem(STORAGE_KEY_DEVICE_ID);
+      if (!devId) {
+        devId = `dev_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+        localStorage.setItem(STORAGE_KEY_DEVICE_ID, devId);
+      }
+      return devId;
+    } catch {
+      return 'dev_local_fallback';
+    }
+  }
+
+  function getLockedDeviceName() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_LOCKED_NAME);
+      return saved ? saved.trim().slice(0, 16) : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function setLockedDeviceName(name) {
+    const clean = String(name || '')
+      .trim()
+      .slice(0, 16);
+    if (!clean) return;
+    try {
+      localStorage.setItem(STORAGE_KEY_LOCKED_NAME, clean);
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  // Küresel & Yerel Skor Tablosu Yönetimi (Cihaz Başına Tek Kullanıcı & En Yüksek Rekor Mantığı)
   function getLocalScores() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_SCORES);
@@ -352,27 +388,52 @@
   }
 
   function deduplicateByPlayerBest(...scoreArrays) {
+    const myDeviceId = getDeviceId();
+    const myLockedName = getLockedDeviceName();
     const combined = [...SEED_GLOBAL_SCORES, ...cachedCloudScores, ...getLocalScores(), ...scoreArrays.flat()];
-    const uniqueByNickname = new Map();
+
+    // 1. Aşama: Aynı cihazdan (deviceId) gelen tüm skorları tek bir kayıtta birleştir (en yüksek skoru tut)
+    const uniqueByDevice = new Map();
+    const withoutDevice = [];
 
     for (const item of combined) {
       if (!item || typeof item.score !== 'number' || !item.name) continue;
-      const cleanName = String(item.name).trim().slice(0, 16) || 'Oyuncu';
-      const playerKey = normalizePlayerKey(cleanName);
+      const devId = item.deviceId ? String(item.deviceId).trim() : '';
+      // Bu cihaza ait kayıtsa her zaman cihazın kilitli tek kullanıcı adını kullan
+      const effectiveName =
+        devId && devId === myDeviceId && myLockedName
+          ? myLockedName
+          : String(item.name).trim().slice(0, 16) || 'Oyuncu';
+      const playerKey = normalizePlayerKey(effectiveName);
       const itemScore = Number(item.score) || 0;
       const itemLevel = Number(item.level) || 1;
 
-      const existing = uniqueByNickname.get(playerKey);
-      // Yalnızca aynı kullanıcının en yüksek skorunu (eşitlikte yüksek seviyesini) tut
-      if (!existing || itemScore > existing.score || (itemScore === existing.score && itemLevel > existing.level)) {
-        uniqueByNickname.set(playerKey, {
-          id: item.id || playerKey,
-          playerKey,
-          name: cleanName,
-          score: itemScore,
-          level: itemLevel,
-          date: item.date || ''
-        });
+      const normalizedItem = {
+        id: item.id || devId || playerKey,
+        deviceId: devId,
+        playerKey,
+        name: effectiveName,
+        score: itemScore,
+        level: itemLevel,
+        date: item.date || ''
+      };
+
+      if (devId) {
+        const prevDev = uniqueByDevice.get(devId);
+        if (!prevDev || itemScore > prevDev.score || (itemScore === prevDev.score && itemLevel > prevDev.level)) {
+          uniqueByDevice.set(devId, normalizedItem);
+        }
+      } else {
+        withoutDevice.push(normalizedItem);
+      }
+    }
+
+    // 2. Aşama: Aynı kullanıcı adına (playerKey) sahip kayıtları da tekilleştir (en yüksek skoru tut)
+    const uniqueByNickname = new Map();
+    for (const item of [...uniqueByDevice.values(), ...withoutDevice]) {
+      const existing = uniqueByNickname.get(item.playerKey);
+      if (!existing || item.score > existing.score || (item.score === existing.score && item.level > existing.level)) {
+        uniqueByNickname.set(item.playerKey, item);
       }
     }
 
@@ -418,9 +479,7 @@
               // skip malformed line
             }
           }
-          if (parsed.length > 0) {
-            cachedCloudScores = parsed;
-          }
+          cachedCloudScores = parsed;
         }
       }
 
@@ -438,24 +497,25 @@
   }
 
   async function saveScoreEntry(name, pts, lvl) {
-    const cleanName = (name || 'Oyuncu').trim().slice(0, 16) || 'Oyuncu';
+    const deviceId = getDeviceId();
+    const existingLockedName = getLockedDeviceName();
+    // Cihazda daha önce kaydedilmiş bir kullanıcı adı varsa her zaman o tek ismi kullan
+    const cleanName = existingLockedName || (name || 'Oyuncu').trim().slice(0, 16) || 'Oyuncu';
+    setLockedDeviceName(cleanName);
+
     const playerKey = normalizePlayerKey(cleanName);
     const newScore = Number(pts) || 0;
     const newLevel = Number(lvl) || 1;
 
     latestSavedKey = playerKey;
 
-    try {
-      localStorage.setItem(STORAGE_KEY_LAST_NAME, cleanName);
-    } catch {
-      // ignore
-    }
-
-    // Mevcut tüm kayıtlar içinde bu kullanıcı adının daha önce rekoru var mı kontrol et
+    // Mevcut tüm kayıtlar içinde bu cihazın (deviceId) veya bu kullanıcı adının (playerKey) rekoru var mı kontrol et
     const allKnown = deduplicateByPlayerBest();
-    const existingRecord = allKnown.find((item) => item.playerKey === playerKey);
+    const existingRecord = allKnown.find(
+      (item) => (item.deviceId && item.deviceId === deviceId) || item.playerKey === playerKey
+    );
 
-    // Eğer oyuncunun önceki rekoru yeni skorundan daha yüksek veya eşitse eski rekoru koru
+    // Eğer oyuncunun önceki rekoru yeni skorundan daha yüksek veya eşitse eski rekoru koru, düşük skoru yansıtma
     if (existingRecord && newScore <= existingRecord.score) {
       renderScoreboard();
       updateHudBest();
@@ -465,11 +525,12 @@
         saveFeedback.textContent =
           newScore === existingRecord.score
             ? `ℹ️ "${existingRecord.name}" rekorun zaten ${existingRecord.score} P! Mevcut rekorun korundu.`
-            : `ℹ️ "${existingRecord.name}" adına daha yüksek rekorun (${existingRecord.score} P) bulunduğu için en iyi rekorun korundu!`;
+            : `ℹ️ Cihaz kullanıcısı "${existingRecord.name}" için en yüksek rekorun (${existingRecord.score} P) korundu; düşük skor (${newScore} P) tabloya yansıtılmadı.`;
       }
 
       trackAnalyticsEvent('leaderboard_submit_kept_best', {
         player_name: cleanName,
+        device_id: deviceId,
         new_score: newScore,
         kept_best_score: existingRecord.score,
         level: newLevel
@@ -479,6 +540,7 @@
 
     const entry = {
       id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      deviceId,
       playerKey,
       name: cleanName,
       score: newScore,
@@ -486,13 +548,17 @@
       date: new Date().toLocaleDateString('tr-TR')
     };
 
-    // 1. Yerel hafızada aynı ismin eski kaydını kaldırıp yalnızca yeni rekorunu kaydet
-    const localList = getLocalScores().filter((item) => normalizePlayerKey(item.name) !== playerKey);
+    // 1. Yerel hafızada aynı cihaza veya aynı isme ait eski kaydı kaldırıp yalnızca yeni en yüksek rekoru kaydet
+    const localList = getLocalScores().filter(
+      (item) => item.deviceId !== deviceId && normalizePlayerKey(item.name) !== playerKey
+    );
     localList.push(entry);
     localList.sort((a, b) => b.score - a.score || b.level - a.level);
     setLocalScores(localList);
 
-    cachedCloudScores = cachedCloudScores.filter((item) => normalizePlayerKey(item.name) !== playerKey);
+    cachedCloudScores = cachedCloudScores.filter(
+      (item) => item.deviceId !== deviceId && normalizePlayerKey(item.name) !== playerKey
+    );
     cachedCloudScores.push(entry);
 
     renderScoreboard();
@@ -501,6 +567,7 @@
     // GA4 Etkinliği Gönder
     trackAnalyticsEvent('leaderboard_submit', {
       player_name: cleanName,
+      device_id: deviceId,
       score: entry.score,
       previous_best: existingRecord ? existingRecord.score : 0,
       level: entry.level
@@ -536,8 +603,8 @@
     if (saveFeedback) {
       saveFeedback.style.display = 'block';
       saveFeedback.textContent = existingRecord
-        ? `🏆 Yeni Kişisel Rekor! "${cleanName}" skoru ${existingRecord.score} P ➔ ${entry.score} P olarak güncellendi!`
-        : `✅ "${cleanName}" (${entry.score} P) küresel skor tablosuna kaydedildi!`;
+        ? `🏆 Yeni Kişisel Rekor! "${cleanName}" satırı ${existingRecord.score} P ➔ ${entry.score} P olarak otomatik güncellendi!`
+        : `✅ Cihaz kullanıcısı "${cleanName}" (${entry.score} P) olarak kaydedildi! Bundan sonraki rekorların otomatik güncellenecek.`;
     }
 
     renderScoreboard();
@@ -582,21 +649,27 @@
   function renderScoreboard() {
     const list = mergeAndSortTop10();
     if (list.length === 0) {
-      scoreboardList.innerHTML = `<div class="empty-scores">Henüz kayıtlı skor yok. İlk rekoru sen kır! 🎯</div>`;
+      scoreboardList.innerHTML = `<div class="empty-scores">Tablo sıfırlandı! Yeni dönemin ilk rekorunu sen kır! 🎯</div>`;
       return;
     }
 
+    const myDeviceId = getDeviceId();
+    const myLockedName = getLockedDeviceName();
+    const myPlayerKey = myLockedName ? normalizePlayerKey(myLockedName) : latestSavedKey;
+
     scoreboardList.innerHTML = list
-      .map(
-        (item, idx) => `
-        <div class="score-row ${item.playerKey === latestSavedKey ? 'highlight' : ''}">
+      .map((item, idx) => {
+        const isMyRow =
+          (item.deviceId && item.deviceId === myDeviceId) || (myPlayerKey && item.playerKey === myPlayerKey);
+        return `
+        <div class="score-row ${isMyRow ? 'highlight' : ''}">
           <span class="rank-badge">${getRankDisplay(idx)}</span>
           <span class="player-name">${escapeHtml(item.name)}</span>
           <span class="player-lvl">Sv. ${item.level}</span>
           <span class="player-pts">${item.score} P</span>
         </div>
-      `
-      )
+      `;
+      })
       .join('');
   }
 
@@ -1648,11 +1721,15 @@
     });
   }
 
-  function showGameOverModal() {
+  async function showGameOverModal() {
+    const lockedName = getLockedDeviceName();
+
     modalTitle.textContent = 'OYUN BİTTİ!';
     modalSubtitle.textContent =
       score > 0
-        ? 'Takma adını (nickname) girerek rekorunu Küresel İlk 10 tablosuna kaydet!'
+        ? lockedName
+          ? `Cihaz kullanıcısı: "${lockedName}" • En yüksek rekorun otomatik kontrol ediliyor...`
+          : 'Bu cihaz için tek bir kullanıcı adı (nickname) belirleyerek rekorunu Küresel İlk 10 tablosuna kaydet!'
         : 'İğneler birbirine çarptı! Kendi rengindeki dilimleri hedefleyerek tekrar dene.';
 
     endStats.style.display = 'grid';
@@ -1663,21 +1740,33 @@
       saveFeedback.style.display = 'none';
     }
 
+    btnStartGame.textContent = '🔄 TEKRAR OYNA';
+    mainOverlay.classList.remove('hidden');
+
     if (score > 0 && !scoreSavedForRun) {
-      saveScoreForm.style.display = 'flex';
-      const savedName = localStorage.getItem(STORAGE_KEY_LAST_NAME) || '';
-      playerNameInput.value = savedName;
-      if (btnSubmitScore) {
-        btnSubmitScore.disabled = false;
-        btnSubmitScore.textContent = 'Skoru Kaydet 🚀';
+      if (lockedName) {
+        // Cihazda kayıtlı tek kullanıcı adı varsa farklı isim girilmesini engelle ve rekoru otomatik güncelle
+        saveScoreForm.style.display = 'none';
+        scoreSavedForRun = true;
+        await fetchGlobalScores();
+        await saveScoreEntry(lockedName, score, level);
+        modalSubtitle.textContent = `Cihaz kullanıcısı: "${lockedName}" • Yalnızca en yüksek rekorun tabloda yer alır.`;
+      } else {
+        // Bu cihazdan ilk kez skor kaydediliyorsa tek seferlik kullanıcı adı seçimine izin ver
+        saveScoreForm.style.display = 'flex';
+        playerNameInput.readOnly = false;
+        playerNameInput.value = '';
+        playerNameInput.placeholder = 'Cihaz kullanıcı adını belirle...';
+        if (btnSubmitScore) {
+          btnSubmitScore.disabled = false;
+          btnSubmitScore.textContent = 'Skoru Kaydet 🚀';
+        }
+        fetchGlobalScores();
       }
     } else {
       saveScoreForm.style.display = 'none';
+      fetchGlobalScores();
     }
-
-    btnStartGame.textContent = '🔄 TEKRAR OYNA';
-    fetchGlobalScores();
-    mainOverlay.classList.remove('hidden');
   }
 
   function openScoreboardModal() {
