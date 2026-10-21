@@ -10,6 +10,7 @@
   // UI Elements
   const hudScore = document.getElementById('hudScore');
   const hudLevel = document.getElementById('hudLevel');
+  const hudLives = document.getElementById('hudLives');
   const hudBest = document.getElementById('hudBest');
   const difficultyBanner = document.getElementById('difficultyBanner');
   const timerBarWrap = document.getElementById('timerBarWrap');
@@ -64,14 +65,51 @@
     }
   }
 
-  const WHEEL_PALETTES = [
-    ['#00F5D4', '#00BBF9', '#FF3366', '#FFCC00', '#9B5DE5', '#FF9933'],
-    ['#F72585', '#FF9E00', '#FEE440', '#06D6A0', '#00BBF9', '#7209B7'],
-    ['#FF595E', '#FF924C', '#FFCA3A', '#8AC926', '#1982C4', '#6A4C93'],
-    ['#EF476F', '#F78C6B', '#FFD166', '#06D6A0', '#118AB2', '#8338EC']
+  // Her 10 Seviyede Bir Değişen Dinamik Neon Temalar (1-10, 11-20, 21-30, 31-40, 41-50...)
+  const CHAPTER_THEMES = [
+    {
+      name: 'Siber Turkuaz',
+      bgDark: '#071324',
+      bgAccent: '#0d2b45',
+      accentColor: '#00f5d4',
+      hubColor: '#0b1830',
+      palette: ['#00F5D4', '#00BBF9', '#FF3366', '#FFCC00', '#9B5DE5', '#FF9933']
+    },
+    {
+      name: 'Kozmik Macenta',
+      bgDark: '#140826',
+      bgAccent: '#2b124c',
+      accentColor: '#f72585',
+      hubColor: '#1b0b33',
+      palette: ['#F72585', '#4CC9F0', '#FEE440', '#06D6A0', '#9B5DE5', '#FF9E00']
+    },
+    {
+      name: 'Zümrüt Aurora',
+      bgDark: '#061f1e',
+      bgAccent: '#0d3b38',
+      accentColor: '#06d6a0',
+      hubColor: '#082927',
+      palette: ['#06D6A0', '#FFD166', '#EF476F', '#118AB2', '#8338EC', '#FF9F1C']
+    },
+    {
+      name: 'Güneş Fırtınası',
+      bgDark: '#1b0c1a',
+      bgAccent: '#38152e',
+      accentColor: '#ff9e00',
+      hubColor: '#240f22',
+      palette: ['#FF595E', '#FFCA3A', '#8AC926', '#1982C4', '#9B5DE5', '#FF924C']
+    },
+    {
+      name: 'Elektrik İndigo',
+      bgDark: '#090d26',
+      bgAccent: '#182052',
+      accentColor: '#4cc9f0',
+      hubColor: '#0e1538',
+      palette: ['#4CC9F0', '#F72585', '#FFBE0B', '#3A86FF', '#00F5D4', '#FF595E']
+    }
   ];
 
-  // Sound Synthesizer (Web Audio API)
+  // Mobil Titreşim (Haptic Feedback) & Web Audio API Ses Sentezleyici
   class SoundFX {
     constructor() {
       this.enabled = true;
@@ -93,6 +131,17 @@
       return this.enabled;
     }
 
+    vibrate(pattern) {
+      if (!this.enabled) return;
+      try {
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          navigator.vibrate(pattern);
+        }
+      } catch {
+        // Desteklemeyen tarayıcılarda sessizce devam et
+      }
+    }
+
     playTone(freq, type, duration, gainVal = 0.15, slideFreq = null) {
       if (!this.enabled) return;
       this.init();
@@ -105,7 +154,7 @@
       osc.type = type;
       osc.frequency.setValueAtTime(freq, now);
       if (slideFreq) {
-        osc.frequency.exponentialRampToValueAtTime(slideFreq, now + duration);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideFreq), now + duration);
       }
 
       gain.gain.setValueAtTime(gainVal, now);
@@ -118,39 +167,97 @@
     }
 
     throwPin() {
-      this.playTone(320, 'triangle', 0.08, 0.11, 600);
+      // Hafif, temiz fırlatma "whoosh" sesi
+      this.playTone(250, 'sine', 0.045, 0.065, 460);
     }
 
+    // Tok, tatmin edici ve kulak yormayan "tık / saplanma" sesi + hafif mobil titreşim
     pinHit(combo = 1) {
-      const base = Math.min(260 + combo * 30, 720);
-      this.playTone(base, 'sine', 0.11, 0.16, base * 1.3);
+      this.vibrate(14);
+      if (!this.enabled) return;
+      this.init();
+      if (!this.ctx) return;
+
+      const now = this.ctx.currentTime;
+
+      // 1. Katman: Tok gövde darbesi (195Hz -> 56Hz hızlı pitch düşüşü, 52ms)
+      const bodyOsc = this.ctx.createOscillator();
+      const bodyGain = this.ctx.createGain();
+      bodyOsc.type = 'triangle';
+      bodyOsc.frequency.setValueAtTime(195, now);
+      bodyOsc.frequency.exponentialRampToValueAtTime(56, now + 0.052);
+      bodyGain.gain.setValueAtTime(0.24, now);
+      bodyGain.gain.exponentialRampToValueAtTime(0.001, now + 0.052);
+      bodyOsc.connect(bodyGain);
+      bodyGain.connect(this.ctx.destination);
+      bodyOsc.start(now);
+      bodyOsc.stop(now + 0.052);
+
+      // 2. Katman: Net mekanik saplanma "tık" transienti (680Hz -> 210Hz, 22ms)
+      const clickOsc = this.ctx.createOscillator();
+      const clickGain = this.ctx.createGain();
+      clickOsc.type = 'sine';
+      clickOsc.frequency.setValueAtTime(680, now);
+      clickOsc.frequency.exponentialRampToValueAtTime(210, now + 0.022);
+      clickGain.gain.setValueAtTime(0.14, now);
+      clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.022);
+      clickOsc.connect(clickGain);
+      clickGain.connect(this.ctx.destination);
+      clickOsc.start(now);
+      clickOsc.stop(now + 0.022);
+
+      // 3. Katman: Göz/kulak yormayan yumuşak kombo rezonansı
+      const harmonicFreq = Math.min(310 + combo * 20, 540);
+      this.playTone(harmonicFreq, 'sine', 0.048, 0.06, harmonicFreq * 1.12);
     }
 
     colorMatch(streak = 1) {
-      const root = Math.min(440 + streak * 40, 880);
-      this.playTone(root, 'triangle', 0.14, 0.2, root * 1.25);
-      setTimeout(() => this.playTone(root * 1.5, 'sine', 0.18, 0.22, root * 2), 55);
+      // Önce tok saplanma hissini ver, ardından yumuşak uyum akorunu çal
+      this.pinHit(streak);
+      this.vibrate([16, 28, 22]);
+      const root = Math.min(392 + streak * 32, 740);
+      setTimeout(() => this.playTone(root, 'triangle', 0.09, 0.12, root * 1.2), 18);
+      setTimeout(() => this.playTone(root * 1.25, 'sine', 0.12, 0.13, root * 1.5), 55);
     }
 
     starHit() {
-      this.playTone(587.33, 'sine', 0.12, 0.2, 880);
-      setTimeout(() => this.playTone(880, 'triangle', 0.18, 0.2, 1174.66), 70);
+      this.pinHit(2);
+      this.vibrate([18, 25, 25]);
+      this.playTone(587.33, 'sine', 0.1, 0.14, 880);
+      setTimeout(() => this.playTone(880, 'triangle', 0.14, 0.14, 1174.66), 60);
     }
 
     levelUp() {
-      const notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+      this.vibrate([22, 35, 30]);
+      const notes = [523.25, 659.25, 783.99, 1046.5];
       notes.forEach((n, i) => {
-        setTimeout(() => this.playTone(n, 'triangle', 0.16, 0.18), i * 60);
+        setTimeout(() => this.playTone(n, 'triangle', 0.14, 0.14), i * 58);
       });
     }
 
+    lifeUp() {
+      this.vibrate([30, 40, 45, 40, 60]);
+      const notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+      notes.forEach((n, i) => {
+        setTimeout(() => this.playTone(n, 'sine', 0.16, 0.17), i * 55);
+      });
+    }
+
+    lifeSaved() {
+      this.vibrate([45, 35, 45]);
+      this.playTone(220, 'triangle', 0.12, 0.2, 140);
+      setTimeout(() => this.playTone(440, 'sine', 0.18, 0.18, 587.33), 75);
+    }
+
     timeoutPenalty() {
-      this.playTone(250, 'sawtooth', 0.12, 0.18, 170);
-      setTimeout(() => this.playTone(165, 'sawtooth', 0.18, 0.2, 105), 85);
+      this.vibrate([35, 30, 35]);
+      this.playTone(250, 'sawtooth', 0.11, 0.15, 170);
+      setTimeout(() => this.playTone(165, 'sawtooth', 0.16, 0.16, 105), 80);
     }
 
     collision() {
-      this.playTone(160, 'sawtooth', 0.35, 0.24, 55);
+      this.vibrate([70, 40, 90]);
+      this.playTone(160, 'sawtooth', 0.32, 0.22, 55);
     }
   }
 
@@ -164,6 +271,8 @@
   let gameState = 'MENU'; // MENU | PLAYING | LEVEL_CLEAR | GAME_OVER | PAUSED
   let score = 0;
   let level = 1;
+  let lives = 1; // Başlangıçta 1 Can hakkı (ve her 10 seviyede +1 Can ödülü)
+  let currentTheme = CHAPTER_THEMES[0];
   let combo = 0;
   let colorMatchStreak = 0;
   let lastThrowTime = 0;
@@ -194,7 +303,9 @@
     stepTraveled: 0,
     pauseTimer: 0,
     pulseScale: 1,
-    palette: WHEEL_PALETTES[0],
+    palette: CHAPTER_THEMES[0].palette,
+    hubColor: CHAPTER_THEMES[0].hubColor,
+    glowColor: CHAPTER_THEMES[0].accentColor,
     matchedSegmentIdx: -1,
     matchFlashAlpha: 0
   };
@@ -438,6 +549,29 @@
     hudBest.textContent = best;
   }
 
+  function updateHudLives() {
+    if (hudLives) {
+      hudLives.textContent = `❤️ ${lives}`;
+    }
+  }
+
+  // Her 10 Seviyede Bir Arka Plan & Çark Renk Temasını Canlı Neon Paletine Geçir
+  function applyThemeForLevel(lvl) {
+    const chapterIndex = Math.floor((Math.max(1, lvl) - 1) / 10) % CHAPTER_THEMES.length;
+    const theme = CHAPTER_THEMES[chapterIndex];
+    currentTheme = theme;
+
+    wheel.palette = theme.palette;
+    wheel.hubColor = theme.hubColor;
+    wheel.glowColor = theme.accentColor;
+
+    const rootStyle = document.documentElement.style;
+    rootStyle.setProperty('--bg-dark', theme.bgDark);
+    rootStyle.setProperty('--bg-accent', theme.bgAccent);
+    rootStyle.setProperty('--turquoise', theme.accentColor);
+    return theme;
+  }
+
   function getRankDisplay(idx) {
     if (idx === 0) return '🥇';
     if (idx === 1) return '🥈';
@@ -604,9 +738,9 @@
     return Number(Math.max(8.5, Math.min(14.5, calculatedSec)).toFixed(1));
   }
 
-  // Balanced & Gradual Progressive Difficulty Configuration (Full 360° Coverage)
+  // Balanced & Gradual Progressive Difficulty Configuration (Full 360° Coverage & 10-Level Theme Shifts)
   function configureLevel(lvl) {
-    wheel.palette = WHEEL_PALETTES[(lvl - 1) % WHEEL_PALETTES.length];
+    const activeTheme = applyThemeForLevel(lvl);
     wheel.patternTimer = 0;
     wheel.stepIndex = 0;
     wheel.stepTraveled = 0;
@@ -670,7 +804,7 @@
       patternName = '🌊 Tam Tur Akıcı Tempo';
     }
 
-    difficultyBanner.textContent = `Seviye ${lvl} • ${patternName}`;
+    difficultyBanner.textContent = `Sv. ${lvl} (${activeTheme.name}) • ${patternName}`;
 
     // Pre-stuck pins: starts with 1 pin on Level 1, grows gradually up to max 6
     stuckPins = [];
@@ -1055,14 +1189,39 @@
       hudScore.textContent = score;
       updateHudBest();
 
-      sfx.levelUp();
-      triggerFlash('#00f5d4', 0.32);
-      spawnParticles(wheel.x, wheel.y, '#00f5d4', 40, 1.5);
-      spawnFloatingText(wheel.x, wheel.y, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00f5d4', 20);
+      const completedThemeChapter = level % 10 === 0;
+      if (completedThemeChapter) {
+        lives++;
+        updateHudLives();
+        sfx.lifeUp();
+        triggerFlash('#ffcc00', 0.38);
+        spawnParticles(wheel.x, wheel.y, '#ffcc00', 52, 1.65);
+        spawnFloatingText(
+          wheel.x,
+          wheel.y - 16,
+          `🎉 ${level}. SEVİYE GEÇİLDİ! YENİ TEMA & ❤️ +1 CAN!`,
+          '#ffcc00',
+          19
+        );
+        spawnFloatingText(wheel.x, wheel.y + 16, `SEVİYE BONUSU +${levelBonus}`, '#00f5d4', 18);
+      } else {
+        sfx.levelUp();
+        triggerFlash(currentTheme.accentColor || '#00f5d4', 0.32);
+        spawnParticles(wheel.x, wheel.y, currentTheme.accentColor || '#00f5d4', 40, 1.5);
+        spawnFloatingText(
+          wheel.x,
+          wheel.y,
+          `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`,
+          currentTheme.accentColor || '#00f5d4',
+          20
+        );
+      }
 
       trackAnalyticsEvent('level_complete', {
         level,
-        score
+        score,
+        lives_remaining: lives,
+        awarded_extra_life: completedThemeChapter
       });
 
       setTimeout(() => {
@@ -1071,19 +1230,50 @@
           configureLevel(level);
           gameState = 'PLAYING';
         }
-      }, 1150);
+      }, completedThemeChapter ? 1450 : 1150);
     }
   }
 
   function handleCollision(collidedPin) {
+    const crashX = wheel.x;
+    const crashY = wheel.y + wheel.radius + wheel.pinLength;
+
+    // Can / Hak Sistemi: Oyuncunun canı varsa oyun bitmesin, 1 can eksilerek devam etsin
+    if (lives > 0) {
+      lives--;
+      updateHudLives();
+      activePin = null;
+      combo = 0;
+      colorMatchStreak = 0;
+      resetPinTimer();
+
+      sfx.lifeSaved();
+      triggerShake(0.3, 9);
+      triggerFlash('#ffcc00', 0.34);
+
+      spawnParticles(crashX, crashY, '#ffcc00', 30, 1.3);
+      spawnFloatingText(
+        crashX,
+        crashY - 18,
+        `🛡️ 1 CAN KULLANILDI! (Kalan: ❤️ ${lives})`,
+        '#ffcc00',
+        18
+      );
+
+      trackAnalyticsEvent('life_used', {
+        level,
+        score,
+        lives_remaining: lives
+      });
+      return;
+    }
+
     gameState = 'GAME_OVER';
     if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
     sfx.collision();
     triggerShake(0.45, 14);
     triggerFlash('#ff1744', 0.45);
 
-    const crashX = wheel.x;
-    const crashY = wheel.y + wheel.radius + wheel.pinLength;
     spawnParticles(crashX, crashY, '#ff1744', 36, 1.4);
     spawnFloatingText(crashX, crashY - 20, 'ÇARPIŞMA!', '#ff5252', 24);
     collidedPin.color = '#ff1744';
@@ -1258,7 +1448,7 @@
     ctx.translate(wheel.x, wheel.y);
     ctx.rotate(wheel.angle);
 
-    ctx.shadowColor = 'rgba(0, 245, 212, 0.35)';
+    ctx.shadowColor = wheel.glowColor || 'rgba(0, 245, 212, 0.35)';
     ctx.shadowBlur = 22;
 
     for (let i = 0; i < segments; i++) {
@@ -1285,7 +1475,7 @@
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    ctx.fillStyle = '#0b1830';
+    ctx.fillStyle = wheel.hubColor || '#0b1830';
     ctx.beginPath();
     ctx.arc(0, 0, r * 0.58, 0, Math.PI * 2);
     ctx.fill();
@@ -1433,6 +1623,7 @@
     sfx.init();
     score = 0;
     level = 1;
+    lives = 1;
     combo = 0;
     colorMatchStreak = 0;
     scoreSavedForRun = false;
@@ -1443,6 +1634,7 @@
     }
 
     hudScore.textContent = '0';
+    updateHudLives();
     updateHudBest();
     configureLevel(1);
 
@@ -1451,7 +1643,8 @@
 
     trackAnalyticsEvent('game_start', {
       viewport_width: width,
-      viewport_height: height
+      viewport_height: height,
+      initial_lives: lives
     });
   }
 
@@ -1581,6 +1774,7 @@
 
   // Initialize
   resizeCanvas();
+  updateHudLives();
   configureLevel(1);
   renderScoreboard();
   updateHudBest();
