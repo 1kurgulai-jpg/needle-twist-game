@@ -137,13 +137,16 @@
       setTimeout(() => this.playTone(880, 'triangle', 0.18, 0.2, 1174.66), 70);
     }
 
-    levelUp(hasTimeBonus = false) {
-      const notes = hasTimeBonus
-        ? [523.25, 659.25, 783.99, 1046.5, 1318.5]
-        : [523.25, 659.25, 783.99, 1046.5];
+    levelUp() {
+      const notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
       notes.forEach((n, i) => {
         setTimeout(() => this.playTone(n, 'triangle', 0.16, 0.18), i * 60);
       });
+    }
+
+    timeoutPenalty() {
+      this.playTone(250, 'sawtooth', 0.12, 0.18, 170);
+      setTimeout(() => this.playTone(165, 'sawtooth', 0.18, 0.2, 105), 85);
     }
 
     collision() {
@@ -168,9 +171,10 @@
   let latestSavedKey = null;
   let cachedCloudScores = [];
 
-  // Time Bonus State per Level
-  let levelTimeLimit = 22;
-  let levelTimeLeft = 22;
+  // Per-Pin Shot Clock State (İğne Başına Süre Sınırı: ~3.2 - 4.2 saniye)
+  let pinTimeLimit = 4.0;
+  let pinTimeLeft = 4.0;
+  let thrownPinTimeLeft = 4.0;
 
   // Geometry
   let wheel = {
@@ -472,12 +476,11 @@
     }[m]));
   }
 
-  // Zaman Bonusu Hesaplama ve Görsel Güncelleme
-  function calculatePotentialTimeBonus() {
-    if (levelTimeLeft <= 0) return 0;
-    const ratio = levelTimeLeft / Math.max(1, levelTimeLimit);
-    const speedBoost = ratio >= 0.5 ? 1.25 : 1.0;
-    return Math.max(10, Math.round(levelTimeLeft * (6 + level * 2.5) * speedBoost));
+  // İğne Başına Süre & Hız Bonusu Hesaplama ve Görsel Güncelleme
+  function calculatePinSpeedBonus(remainingSec = pinTimeLeft) {
+    if (remainingSec <= 0) return 0;
+    const ratio = Math.max(0, Math.min(1, remainingSec / Math.max(0.1, pinTimeLimit)));
+    return Math.max(2, Math.round(ratio * (8 + level * 2.5)));
   }
 
   function getTimerColor(ratio) {
@@ -486,10 +489,17 @@
     return '#ff3366';
   }
 
+  function resetPinTimer() {
+    pinTimeLeft = pinTimeLimit;
+    thrownPinTimeLeft = pinTimeLimit;
+    if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
+    updateTimerUI();
+  }
+
   function updateTimerUI() {
     if (!timerFill || !timerValue) return;
-    const ratio = Math.max(0, Math.min(1, levelTimeLeft / Math.max(1, levelTimeLimit)));
-    const bonusPreview = calculatePotentialTimeBonus();
+    const ratio = Math.max(0, Math.min(1, pinTimeLeft / Math.max(0.1, pinTimeLimit)));
+    const bonusPreview = calculatePinSpeedBonus(pinTimeLeft);
 
     timerFill.style.width = `${(ratio * 100).toFixed(1)}%`;
 
@@ -505,7 +515,7 @@
       timerFill.style.background = 'linear-gradient(90deg, #ff3366, #ff6b35)';
       timerValue.style.color = '#ff3366';
       if (timerBarWrap) {
-        if (ratio > 0 && gameState === 'PLAYING') {
+        if (ratio > 0 && gameState === 'PLAYING' && !activePin) {
           timerBarWrap.classList.add('pulse-low');
         } else {
           timerBarWrap.classList.remove('pulse-low');
@@ -513,13 +523,10 @@
       }
     }
 
-    if (levelTimeLeft > 0) {
-      if (timerLabel) timerLabel.textContent = '⏱️ Zaman Bonusu';
-      timerValue.textContent = `${levelTimeLeft.toFixed(1)}s • +${bonusPreview} P`;
-    } else {
-      if (timerLabel) timerLabel.textContent = '⏱️ Süre Doldu';
-      timerValue.textContent = 'Bonus: 0 P';
+    if (timerLabel) {
+      timerLabel.textContent = '⏱️ İğne Süresi';
     }
+    timerValue.textContent = `${pinTimeLeft.toFixed(1)}s • ⚡+${bonusPreview} P`;
   }
 
   // Responsive Fullscreen Canvas Setup
@@ -574,28 +581,12 @@
     return wheel.palette[getSegmentIndexAtAngle(relativeAngle)];
   }
 
-  // Çarkın dönüş hızına, hareket desenine, engel yoğunluğuna ve toplam iğne sayısına göre dinamik süre hesabı
-  function calculateDynamicLevelTime(pinCount, obstacles) {
-    let patternEfficiency = 1.0;
-    let pauseAllowancePerTurn = 0;
-
-    if (wheel.pattern === 'GENTLE_WAVE') {
-      patternEfficiency = 0.82;
-    } else if (wheel.pattern === 'STEP_SEQUENCE') {
-      patternEfficiency = 0.74;
-      pauseAllowancePerTurn = 0.35;
-    }
-
-    // Çark yavaşken 1 tam tur süresi uzar -> oyuncuya renk/boşluk beklemesi için daha esnek süre verilir
-    const effectiveRadPerSec = Math.max(0.45, wheel.baseSpeed * 60 * patternEfficiency);
-    const secondsPerFullTurn = (Math.PI * 2) / effectiveRadPerSec + pauseAllowancePerTurn;
-
-    // İğne başına gereken tur oranı (çark üzerindeki engel sayısı arttıkça nişan alma payı artar)
-    const turnsPerPin = 0.42 + obstacles * 0.035;
-    const comfortBuffer = 6;
-
-    const totalSeconds = comfortBuffer + pinCount * turnsPerPin * secondsPerFullTurn;
-    return Math.round(Math.max(18, totalSeconds));
+  // Her bir iğne için fırlatma süresi (3.2 - 4.2 saniye arası, çark hızına uyumlu)
+  function calculatePinTimeLimit(lvl) {
+    // İlk seviyelerde çark daha yavaş döndüğü için doğru rengi beklemeye ~4.2sn, hızlandıkça ~3.3sn
+    const baseSec = Math.max(3.3, 4.2 - (lvl - 1) * 0.08);
+    const patternBonus = wheel.pattern === 'STEP_SEQUENCE' ? 0.3 : 0;
+    return Number((baseSec + patternBonus).toFixed(1));
   }
 
   // Balanced & Gradual Progressive Difficulty Configuration (Full 360° Coverage)
@@ -702,10 +693,9 @@
     pinsRemaining = totalPinsForLevel;
     activePin = null;
 
-    // Çarkın dönüş hızına ve atılacak toplam iğne sayısına göre dinamik süre hesabı
-    levelTimeLimit = calculateDynamicLevelTime(totalPinsForLevel, obstacleCount);
-    levelTimeLeft = levelTimeLimit;
-    updateTimerUI();
+    // İğne başına fırlatma süresini ayarla ve başlat
+    pinTimeLimit = calculatePinTimeLimit(lvl);
+    resetPinTimer();
 
     pinQueueColors = [];
     for (let i = 0; i < totalPinsForLevel; i++) {
@@ -727,10 +717,15 @@
     return Math.max(minLaunchY, Math.min(height - bottomSpace, maxLaunchY));
   }
 
-  // Action: Throw Pin
+  // Action: Throw Pin (İğneyi fırlattığı an kalan süreyi kilitle ve sayacı yeni iğne için sıfırla)
   function throwPin() {
     if (gameState !== 'PLAYING') return;
     if (activePin || pinsRemaining <= 0) return;
+
+    thrownPinTimeLeft = pinTimeLeft;
+    pinTimeLeft = pinTimeLimit;
+    if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
+    updateTimerUI();
 
     activePin = {
       x: wheel.x,
@@ -739,7 +734,42 @@
       color: getCurrentPinColor()
     };
     sfx.throwPin();
-    trackAnalyticsEvent('pin_throw', { level, pins_remaining: pinsRemaining - 1 });
+    trackAnalyticsEvent('pin_throw', {
+      level,
+      pins_remaining: pinsRemaining - 1,
+      pin_time_left: Number(thrownPinTimeLeft.toFixed(2))
+    });
+  }
+
+  // İğne süresi dolduğunda ceza puanı uygula, eldeki iğneyi kaçır ve yeni iğne için süreyi başlat
+  function handlePinTimeout() {
+    const penalty = 15 * level;
+    score = Math.max(0, score - penalty);
+    hudScore.textContent = score;
+    combo = 0;
+    colorMatchStreak = 0;
+
+    sfx.timeoutPenalty();
+    triggerShake(0.22, 6);
+    triggerFlash('#ff6b35', 0.24);
+
+    const launchY = getLaunchY();
+    const missedColor = getCurrentPinColor();
+    spawnParticles(wheel.x, launchY + wheel.pinLength * 0.7, missedColor, 20, 1.05);
+    spawnFloatingText(wheel.x, launchY - 12, `⌛ SÜRE DOLDU! İĞNE KAÇTI (-${penalty} P)`, '#ff5252', 17);
+
+    // Kaçırılan iğnenin yerine sıradaki farklı bir renk ver ve süreyi yeni iğne için sıfırla
+    const curIdx = totalPinsForLevel - pinsRemaining;
+    const nextPaletteIdx = (wheel.palette.indexOf(missedColor) + 1) % wheel.palette.length;
+    pinQueueColors[curIdx] = wheel.palette[nextPaletteIdx >= 0 ? nextPaletteIdx : 0];
+
+    resetPinTimer();
+
+    trackAnalyticsEvent('pin_timeout_penalty', {
+      level,
+      penalty,
+      score_after: score
+    });
   }
 
   // Particle & Floating Text Helpers
@@ -810,10 +840,13 @@
       return;
     }
 
-    // Aktif oyun sırasında Zaman Bonusu sayacını ilerlet
-    if (gameState === 'PLAYING' && levelTimeLeft > 0) {
-      levelTimeLeft = Math.max(0, levelTimeLeft - dt);
+    // Oyuncu elindeki iğneyi fırlatmak için beklerken İğne Başına Süre sayacını azalt
+    if (gameState === 'PLAYING' && !activePin && pinsRemaining > 0) {
+      pinTimeLeft = Math.max(0, pinTimeLeft - dt);
       updateTimerUI();
+      if (pinTimeLeft <= 0) {
+        handlePinTimeout();
+      }
     }
 
     // Smooth, Full-360° Coverage Wheel Rotation Patterns
@@ -938,6 +971,7 @@
     }
 
     const basePoints = 10 * level + (combo > 1 ? (combo - 1) * 5 : 0);
+    const speedBonus = calculatePinSpeedBonus(thrownPinTimeLeft);
     let colorBonus = 0;
 
     if (isColorMatched) {
@@ -966,53 +1000,54 @@
       spawnParticles(impactX, impactY, color, 14, 0.9);
     }
 
-    const totalEarned = basePoints + colorBonus + starBonus;
+    const totalEarned = basePoints + colorBonus + speedBonus + starBonus;
     score += totalEarned;
     hudScore.textContent = score;
     updateHudBest();
 
     if (isSliceMatch && isNeighborPinMatch) {
-      spawnFloatingText(impactX, impactY + 28, `🌈 SÜPER RENK UYUMU! +${basePoints + colorBonus}`, color, 20);
+      spawnFloatingText(
+        impactX,
+        impactY + 28,
+        `🌈 SÜPER UYUM! +${basePoints + colorBonus} (⚡+${speedBonus})`,
+        color,
+        19
+      );
     } else if (isColorMatched) {
-      const streakTxt = colorMatchStreak > 1 ? ` (Seri x${colorMatchStreak})` : '';
-      spawnFloatingText(impactX, impactY + 28, `🎨 RENK UYUMU! x2 +${basePoints + colorBonus}${streakTxt}`, color, 19);
+      const streakTxt = colorMatchStreak > 1 ? ` x${colorMatchStreak}` : '';
+      spawnFloatingText(
+        impactX,
+        impactY + 28,
+        `🎨 RENK UYUMU${streakTxt}! +${basePoints + colorBonus} (⚡+${speedBonus})`,
+        color,
+        18
+      );
     } else {
-      const comboText = combo > 1 ? `🔥 x${combo} (+${basePoints})` : `+${basePoints}`;
-      spawnFloatingText(impactX, impactY + 26, comboText, '#ffffff', combo > 1 ? 18 : 16);
+      const comboText = combo > 1 ? `🔥 x${combo} +${basePoints} (⚡+${speedBonus} Hız)` : `+${basePoints} (⚡+${speedBonus} Hız)`;
+      spawnFloatingText(impactX, impactY + 26, comboText, '#ffffff', combo > 1 ? 17 : 15.5);
     }
 
-    // Check Level Clear + Time Bonus Calculation
+    // Sonraki iğne için süreyi sıfırla
+    resetPinTimer();
+
+    // Check Level Clear
     if (pinsRemaining <= 0) {
       gameState = 'LEVEL_CLEAR';
       if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
 
       const levelBonus = 50 * level;
-      const timeBonus = calculatePotentialTimeBonus();
-      score += levelBonus + timeBonus;
+      score += levelBonus;
       hudScore.textContent = score;
       updateHudBest();
 
-      sfx.levelUp(timeBonus > 0);
+      sfx.levelUp();
       triggerFlash('#00f5d4', 0.32);
-      spawnParticles(wheel.x, wheel.y, '#00f5d4', 36, 1.45);
-      spawnFloatingText(wheel.x, wheel.y - 12, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00f5d4', 20);
-
-      if (timeBonus > 0) {
-        spawnParticles(wheel.x, wheel.y, '#ffcc00', 28, 1.6);
-        spawnFloatingText(
-          wheel.x,
-          wheel.y + 18,
-          `⏱️ ZAMAN BONUSU (${levelTimeLeft.toFixed(1)}sn): +${timeBonus} P!`,
-          '#ffcc00',
-          19
-        );
-      }
+      spawnParticles(wheel.x, wheel.y, '#00f5d4', 40, 1.5);
+      spawnFloatingText(wheel.x, wheel.y, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00f5d4', 20);
 
       trackAnalyticsEvent('level_complete', {
         level,
-        score,
-        time_remaining: Number(levelTimeLeft.toFixed(1)),
-        time_bonus: timeBonus
+        score
       });
 
       setTimeout(() => {
@@ -1021,7 +1056,7 @@
           configureLevel(level);
           gameState = 'PLAYING';
         }
-      }, 1250);
+      }, 1150);
     }
   }
 
@@ -1242,8 +1277,8 @@
 
     ctx.restore();
 
-    // Çark Merkezinde Görsel Zaman Bonusu Halkası (Time Bonus Ring)
-    const timeRatio = Math.max(0, Math.min(1, levelTimeLeft / Math.max(1, levelTimeLimit)));
+    // Çark Merkezinde İğne Süresi Halkası (Per-Pin Shot Clock Ring)
+    const timeRatio = Math.max(0, Math.min(1, pinTimeLeft / Math.max(0.1, pinTimeLimit)));
     const ringRadius = r * 0.57;
     ctx.save();
     ctx.lineWidth = 3;
@@ -1318,6 +1353,19 @@
     if (!activePin && pinsRemaining > 0 && gameState === 'PLAYING') {
       const nextColor = getCurrentPinColor();
       drawSinglePinAt(wheel.x, launchY, nextColor, 1);
+
+      // Eldeki iğnenin baş kısmı etrafında geri sayım halkası
+      const ratio = Math.max(0, Math.min(1, pinTimeLeft / Math.max(0.1, pinTimeLimit)));
+      const headY = launchY + wheel.pinLength;
+      const ringR = wheel.pinHeadRadius * 1.65;
+      ctx.save();
+      ctx.lineWidth = 2.4;
+      ctx.strokeStyle = getTimerColor(ratio);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(wheel.x, headY, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+      ctx.stroke();
+      ctx.restore();
     }
 
     const queueStartCount = activePin ? pinsRemaining : pinsRemaining - 1;
