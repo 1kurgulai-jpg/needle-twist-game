@@ -1,6 +1,6 @@
 /**
  * RENKLİ ÇARK - HTML5 & Canvas Mobil Uyumlu İğne Saplama Oyunu
- * Google Analytics (GA4) & Küresel Skor Tablosu (Global Leaderboard) Entegrasyonlu
+ * Google Analytics (GA4), Benzersiz Küresel Skor Tablosu & Zaman Bonusu Mekaniği
  */
 
 (() => {
@@ -12,6 +12,10 @@
   const hudLevel = document.getElementById('hudLevel');
   const hudBest = document.getElementById('hudBest');
   const difficultyBanner = document.getElementById('difficultyBanner');
+  const timerBarWrap = document.getElementById('timerBarWrap');
+  const timerLabel = document.getElementById('timerLabel');
+  const timerValue = document.getElementById('timerValue');
+  const timerFill = document.getElementById('timerFill');
   const mainOverlay = document.getElementById('mainOverlay');
   const modalTitle = document.getElementById('modalTitle');
   const modalSubtitle = document.getElementById('modalSubtitle');
@@ -28,14 +32,11 @@
   const btnScoreboard = document.getElementById('btnScoreboard');
   const btnSound = document.getElementById('btnSound');
   const btnRefreshScores = document.getElementById('btnRefreshScores');
-  const btnClearScores = document.getElementById('btnClearScores');
 
   // Storage & Cloud Leaderboard Endpoints
   const STORAGE_KEY_SCORES = 'renkli_cark_leaderboard_v2';
   const STORAGE_KEY_LAST_NAME = 'renkli_cark_player_name';
-  // İsteğe bağlı özel Firebase Realtime Database URL'si (örn: 'https://proje-adi-default-rtdb.firebaseio.com/scores.json')
   const FIREBASE_DB_URL = window.FIREBASE_DB_URL || '';
-  // Sıfır kurulum gerektiren gerçek zamanlı küresel bulut skor kanalı
   const CLOUD_LEADERBOARD_TOPIC = 'needle_twist_leaderboard_1kurgulai_v1';
   const CLOUD_LEADERBOARD_URL = `https://ntfy.sh/${CLOUD_LEADERBOARD_TOPIC}`;
 
@@ -136,10 +137,12 @@
       setTimeout(() => this.playTone(880, 'triangle', 0.18, 0.2, 1174.66), 70);
     }
 
-    levelUp() {
-      const notes = [523.25, 659.25, 783.99, 1046.5];
+    levelUp(hasTimeBonus = false) {
+      const notes = hasTimeBonus
+        ? [523.25, 659.25, 783.99, 1046.5, 1318.5]
+        : [523.25, 659.25, 783.99, 1046.5];
       notes.forEach((n, i) => {
-        setTimeout(() => this.playTone(n, 'triangle', 0.16, 0.18), i * 65);
+        setTimeout(() => this.playTone(n, 'triangle', 0.16, 0.18), i * 60);
       });
     }
 
@@ -162,8 +165,12 @@
   let colorMatchStreak = 0;
   let lastThrowTime = 0;
   let scoreSavedForRun = false;
-  let latestSavedId = null;
+  let latestSavedKey = null;
   let cachedCloudScores = [];
+
+  // Time Bonus State per Level
+  let levelTimeLimit = 22;
+  let levelTimeLeft = 22;
 
   // Geometry
   let wheel = {
@@ -201,7 +208,17 @@
   let flashColor = null;
   let flashAlpha = 0;
 
-  // Küresel & Yerel Skor Tablosu Yönetimi (Global Top 10 Leaderboard)
+  // Benzersiz Kullanıcı Adı (Nickname) Normalizasyonu
+  function normalizePlayerKey(name) {
+    return (
+      String(name || 'Oyuncu')
+        .trim()
+        .slice(0, 16)
+        .toLocaleLowerCase('tr-TR') || 'oyuncu'
+    );
+  }
+
+  // Küresel & Yerel Skor Tablosu Yönetimi (Benzersiz İsim & En Yüksek Rekor Mantığı)
   function getLocalScores() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_SCORES);
@@ -213,34 +230,42 @@
 
   function setLocalScores(list) {
     try {
-      localStorage.setItem(STORAGE_KEY_SCORES, JSON.stringify(list.slice(0, 20)));
+      localStorage.setItem(STORAGE_KEY_SCORES, JSON.stringify(list.slice(0, 30)));
     } catch {
       // ignore quota errors
     }
   }
 
-  function mergeAndSortTop10(...scoreArrays) {
+  function deduplicateByPlayerBest(...scoreArrays) {
     const combined = [...SEED_GLOBAL_SCORES, ...cachedCloudScores, ...getLocalScores(), ...scoreArrays.flat()];
-    const uniqueMap = new Map();
+    const uniqueByNickname = new Map();
 
     for (const item of combined) {
       if (!item || typeof item.score !== 'number' || !item.name) continue;
       const cleanName = String(item.name).trim().slice(0, 16) || 'Oyuncu';
-      const key = item.id ? String(item.id) : `${cleanName.toLowerCase()}_${item.score}_${item.level}`;
-      const existing = uniqueMap.get(key);
-      if (!existing || item.score > existing.score) {
-        uniqueMap.set(key, {
-          id: item.id || key,
+      const playerKey = normalizePlayerKey(cleanName);
+      const itemScore = Number(item.score) || 0;
+      const itemLevel = Number(item.level) || 1;
+
+      const existing = uniqueByNickname.get(playerKey);
+      // Yalnızca aynı kullanıcının en yüksek skorunu (eşitlikte yüksek seviyesini) tut
+      if (!existing || itemScore > existing.score || (itemScore === existing.score && itemLevel > existing.level)) {
+        uniqueByNickname.set(playerKey, {
+          id: item.id || playerKey,
+          playerKey,
           name: cleanName,
-          score: Number(item.score) || 0,
-          level: Number(item.level) || 1,
+          score: itemScore,
+          level: itemLevel,
           date: item.date || ''
         });
       }
     }
 
-    const sorted = Array.from(uniqueMap.values()).sort((a, b) => b.score - a.score || b.level - a.level);
-    return sorted.slice(0, 10);
+    return Array.from(uniqueByNickname.values()).sort((a, b) => b.score - a.score || b.level - a.level);
+  }
+
+  function mergeAndSortTop10(...scoreArrays) {
+    return deduplicateByPlayerBest(...scoreArrays).slice(0, 10);
   }
 
   async function fetchGlobalScores() {
@@ -249,7 +274,6 @@
     }
 
     try {
-      // 1. Özel Firebase Realtime DB tanımlıysa oradan çek
       if (FIREBASE_DB_URL) {
         const res = await fetch(FIREBASE_DB_URL);
         if (res.ok) {
@@ -259,7 +283,6 @@
           }
         }
       } else {
-        // 2. Varsayılan Küresel Bulut Kanalından (ntfy JSON stream) son skorları çek
         const res = await fetch(`${CLOUD_LEADERBOARD_URL}/json?poll=1&since=720h`, {
           cache: 'no-store'
         });
@@ -301,21 +324,11 @@
 
   async function saveScoreEntry(name, pts, lvl) {
     const cleanName = (name || 'Oyuncu').trim().slice(0, 16) || 'Oyuncu';
-    const entry = {
-      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      name: cleanName,
-      score: Number(pts) || 0,
-      level: Number(lvl) || 1,
-      date: new Date().toLocaleDateString('tr-TR')
-    };
+    const playerKey = normalizePlayerKey(cleanName);
+    const newScore = Number(pts) || 0;
+    const newLevel = Number(lvl) || 1;
 
-    latestSavedId = entry.id;
-
-    // 1. Yerel hafızaya anında kaydet
-    const localList = getLocalScores();
-    localList.push(entry);
-    localList.sort((a, b) => b.score - a.score || b.level - a.level);
-    setLocalScores(localList);
+    latestSavedKey = playerKey;
 
     try {
       localStorage.setItem(STORAGE_KEY_LAST_NAME, cleanName);
@@ -323,7 +336,50 @@
       // ignore
     }
 
+    // Mevcut tüm kayıtlar içinde bu kullanıcı adının daha önce rekoru var mı kontrol et
+    const allKnown = deduplicateByPlayerBest();
+    const existingRecord = allKnown.find((item) => item.playerKey === playerKey);
+
+    // Eğer oyuncunun önceki rekoru yeni skorundan daha yüksek veya eşitse eski rekoru koru
+    if (existingRecord && newScore <= existingRecord.score) {
+      renderScoreboard();
+      updateHudBest();
+
+      if (saveFeedback) {
+        saveFeedback.style.display = 'block';
+        saveFeedback.textContent =
+          newScore === existingRecord.score
+            ? `ℹ️ "${existingRecord.name}" rekorun zaten ${existingRecord.score} P! Mevcut rekorun korundu.`
+            : `ℹ️ "${existingRecord.name}" adına daha yüksek rekorun (${existingRecord.score} P) bulunduğu için en iyi rekorun korundu!`;
+      }
+
+      trackAnalyticsEvent('leaderboard_submit_kept_best', {
+        player_name: cleanName,
+        new_score: newScore,
+        kept_best_score: existingRecord.score,
+        level: newLevel
+      });
+      return;
+    }
+
+    const entry = {
+      id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      playerKey,
+      name: cleanName,
+      score: newScore,
+      level: newLevel,
+      date: new Date().toLocaleDateString('tr-TR')
+    };
+
+    // 1. Yerel hafızada aynı ismin eski kaydını kaldırıp yalnızca yeni rekorunu kaydet
+    const localList = getLocalScores().filter((item) => normalizePlayerKey(item.name) !== playerKey);
+    localList.push(entry);
+    localList.sort((a, b) => b.score - a.score || b.level - a.level);
+    setLocalScores(localList);
+
+    cachedCloudScores = cachedCloudScores.filter((item) => normalizePlayerKey(item.name) !== playerKey);
     cachedCloudScores.push(entry);
+
     renderScoreboard();
     updateHudBest();
 
@@ -331,6 +387,7 @@
     trackAnalyticsEvent('leaderboard_submit', {
       player_name: cleanName,
       score: entry.score,
+      previous_best: existingRecord ? existingRecord.score : 0,
       level: entry.level
     });
 
@@ -355,18 +412,17 @@
       if (syncBadge) {
         syncBadge.textContent = '🌐 Canlı Küresel';
       }
-      if (saveFeedback) {
-        saveFeedback.style.display = 'block';
-        saveFeedback.textContent = `✅ "${cleanName}" küresel skor tablosuna kaydedildi!`;
-      }
     } catch {
       if (syncBadge) {
         syncBadge.textContent = '📱 Yerel Kaydedildi';
       }
-      if (saveFeedback) {
-        saveFeedback.style.display = 'block';
-        saveFeedback.textContent = `✅ "${cleanName}" skor tablosuna kaydedildi!`;
-      }
+    }
+
+    if (saveFeedback) {
+      saveFeedback.style.display = 'block';
+      saveFeedback.textContent = existingRecord
+        ? `🏆 Yeni Kişisel Rekor! "${cleanName}" skoru ${existingRecord.score} P ➔ ${entry.score} P olarak güncellendi!`
+        : `✅ "${cleanName}" (${entry.score} P) küresel skor tablosuna kaydedildi!`;
     }
 
     renderScoreboard();
@@ -395,7 +451,7 @@
     scoreboardList.innerHTML = list
       .map(
         (item, idx) => `
-        <div class="score-row ${item.id === latestSavedId ? 'highlight' : ''}">
+        <div class="score-row ${item.playerKey === latestSavedKey ? 'highlight' : ''}">
           <span class="rank-badge">${getRankDisplay(idx)}</span>
           <span class="player-name">${escapeHtml(item.name)}</span>
           <span class="player-lvl">Sv. ${item.level}</span>
@@ -416,6 +472,56 @@
     }[m]));
   }
 
+  // Zaman Bonusu Hesaplama ve Görsel Güncelleme
+  function calculatePotentialTimeBonus() {
+    if (levelTimeLeft <= 0) return 0;
+    const ratio = levelTimeLeft / Math.max(1, levelTimeLimit);
+    const speedBoost = ratio >= 0.5 ? 1.25 : 1.0;
+    return Math.max(10, Math.round(levelTimeLeft * (6 + level * 2.5) * speedBoost));
+  }
+
+  function getTimerColor(ratio) {
+    if (ratio > 0.5) return '#00f5d4';
+    if (ratio > 0.25) return '#ffcc00';
+    return '#ff3366';
+  }
+
+  function updateTimerUI() {
+    if (!timerFill || !timerValue) return;
+    const ratio = Math.max(0, Math.min(1, levelTimeLeft / Math.max(1, levelTimeLimit)));
+    const bonusPreview = calculatePotentialTimeBonus();
+
+    timerFill.style.width = `${(ratio * 100).toFixed(1)}%`;
+
+    if (ratio > 0.5) {
+      timerFill.style.background = 'linear-gradient(90deg, #00f5d4, #00e5ff)';
+      timerValue.style.color = '#00f5d4';
+      if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
+    } else if (ratio > 0.25) {
+      timerFill.style.background = 'linear-gradient(90deg, #ffcc00, #ff9933)';
+      timerValue.style.color = '#ffcc00';
+      if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
+    } else {
+      timerFill.style.background = 'linear-gradient(90deg, #ff3366, #ff6b35)';
+      timerValue.style.color = '#ff3366';
+      if (timerBarWrap) {
+        if (ratio > 0 && gameState === 'PLAYING') {
+          timerBarWrap.classList.add('pulse-low');
+        } else {
+          timerBarWrap.classList.remove('pulse-low');
+        }
+      }
+    }
+
+    if (levelTimeLeft > 0) {
+      if (timerLabel) timerLabel.textContent = '⏱️ Zaman Bonusu';
+      timerValue.textContent = `${levelTimeLeft.toFixed(1)}s • +${bonusPreview} P`;
+    } else {
+      if (timerLabel) timerLabel.textContent = '⏱️ Süre Doldu';
+      timerValue.textContent = 'Bonus: 0 P';
+    }
+  }
+
   // Responsive Fullscreen Canvas Setup
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
@@ -427,16 +533,16 @@
     canvas.height = Math.floor(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const topHudBottom = 104;
-    const usableHeight = Math.max(320, height - topHudBottom);
+    const topHudBottom = 132;
+    const usableHeight = Math.max(300, height - topHudBottom);
     const minDim = Math.min(width, usableHeight * 0.92);
 
-    wheel.radius = Math.max(48, Math.min(78, minDim * 0.165));
-    wheel.pinLength = Math.max(40, Math.min(62, minDim * 0.132));
-    wheel.pinHeadRadius = Math.max(6.5, Math.min(8.8, minDim * 0.0185));
+    wheel.radius = Math.max(46, Math.min(76, minDim * 0.16));
+    wheel.pinLength = Math.max(38, Math.min(60, minDim * 0.128));
+    wheel.pinHeadRadius = Math.max(6.5, Math.min(8.6, minDim * 0.018));
 
     wheel.x = width / 2;
-    const minWheelY = topHudBottom + wheel.radius + wheel.pinLength + 16;
+    const minWheelY = topHudBottom + wheel.radius + wheel.pinLength + 12;
     const idealWheelY = topHudBottom + usableHeight * 0.34;
     wheel.y = Math.max(minWheelY, idealWheelY);
   }
@@ -572,6 +678,11 @@
     pinsRemaining = totalPinsForLevel;
     activePin = null;
 
+    // Bölüme ve iğne sayısına göre artan Zaman Bonusu süresi (örn. Sv1: ~24sn, Sv10: ~38sn)
+    levelTimeLimit = Math.round(13 + totalPinsForLevel * 1.65 + Math.min(lvl * 0.7, 10));
+    levelTimeLeft = levelTimeLimit;
+    updateTimerUI();
+
     pinQueueColors = [];
     for (let i = 0; i < totalPinsForLevel; i++) {
       pinQueueColors.push(wheel.palette[i % wheel.palette.length]);
@@ -673,6 +784,12 @@
     if (gameState !== 'PLAYING' && gameState !== 'LEVEL_CLEAR') {
       wheel.angle = normalizeAngle(wheel.angle + 0.65 * dt);
       return;
+    }
+
+    // Aktif oyun sırasında Zaman Bonusu sayacını ilerlet
+    if (gameState === 'PLAYING' && levelTimeLeft > 0) {
+      levelTimeLeft = Math.max(0, levelTimeLeft - dt);
+      updateTimerUI();
     }
 
     // Smooth, Full-360° Coverage Wheel Rotation Patterns
@@ -840,22 +957,38 @@
       spawnFloatingText(impactX, impactY + 26, comboText, '#ffffff', combo > 1 ? 18 : 16);
     }
 
-    // Check Level Clear
+    // Check Level Clear + Time Bonus Calculation
     if (pinsRemaining <= 0) {
       gameState = 'LEVEL_CLEAR';
+      if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
+
       const levelBonus = 50 * level;
-      score += levelBonus;
+      const timeBonus = calculatePotentialTimeBonus();
+      score += levelBonus + timeBonus;
       hudScore.textContent = score;
       updateHudBest();
 
-      sfx.levelUp();
-      triggerFlash('#00f5d4', 0.3);
-      spawnParticles(wheel.x, wheel.y, '#00f5d4', 40, 1.5);
-      spawnFloatingText(wheel.x, wheel.y, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00f5d4', 21);
+      sfx.levelUp(timeBonus > 0);
+      triggerFlash('#00f5d4', 0.32);
+      spawnParticles(wheel.x, wheel.y, '#00f5d4', 36, 1.45);
+      spawnFloatingText(wheel.x, wheel.y - 12, `SEVİYE ${level} TAMAMLANDI! +${levelBonus}`, '#00f5d4', 20);
+
+      if (timeBonus > 0) {
+        spawnParticles(wheel.x, wheel.y, '#ffcc00', 28, 1.6);
+        spawnFloatingText(
+          wheel.x,
+          wheel.y + 18,
+          `⏱️ ZAMAN BONUSU (${levelTimeLeft.toFixed(1)}sn): +${timeBonus} P!`,
+          '#ffcc00',
+          19
+        );
+      }
 
       trackAnalyticsEvent('level_complete', {
         level,
-        score
+        score,
+        time_remaining: Number(levelTimeLeft.toFixed(1)),
+        time_bonus: timeBonus
       });
 
       setTimeout(() => {
@@ -864,12 +997,13 @@
           configureLevel(level);
           gameState = 'PLAYING';
         }
-      }, 1150);
+      }, 1250);
     }
   }
 
   function handleCollision(collidedPin) {
     gameState = 'GAME_OVER';
+    if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
     sfx.collision();
     triggerShake(0.45, 14);
     triggerFlash('#ff1744', 0.45);
@@ -1079,25 +1213,43 @@
 
     ctx.fillStyle = '#0b1830';
     ctx.beginPath();
-    ctx.arc(0, 0, r * 0.54, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 0.56, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = 'rgba(0, 245, 212, 0.32)';
+    ctx.restore();
+
+    // Çark Merkezinde Görsel Zaman Bonusu Halkası (Time Bonus Ring)
+    const timeRatio = Math.max(0, Math.min(1, levelTimeLeft / Math.max(1, levelTimeLimit)));
+    const ringRadius = r * 0.55;
+    ctx.save();
+    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.beginPath();
+    ctx.arc(wheel.x, wheel.y, ringRadius, 0, Math.PI * 2);
     ctx.stroke();
 
+    if (timeRatio > 0) {
+      const ringColor = getTimerColor(timeRatio);
+      ctx.strokeStyle = ringColor;
+      ctx.shadowColor = ringColor;
+      ctx.shadowBlur = 8;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(wheel.x, wheel.y, ringRadius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * timeRatio);
+      ctx.stroke();
+    }
     ctx.restore();
 
     ctx.save();
     ctx.fillStyle = '#ffffff';
-    ctx.font = `900 ${Math.round(r * 0.46)}px system-ui, sans-serif`;
+    ctx.font = `900 ${Math.round(r * 0.45)}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(pinsRemaining, wheel.x, wheel.y - 2);
 
     ctx.fillStyle = 'rgba(0, 245, 212, 0.85)';
-    ctx.font = `700 ${Math.round(r * 0.145)}px system-ui, sans-serif`;
-    ctx.fillText('KALAN İĞNE', wheel.x, wheel.y + r * 0.3);
+    ctx.font = `700 ${Math.round(r * 0.14)}px system-ui, sans-serif`;
+    ctx.fillText('KALAN İĞNE', wheel.x, wheel.y + r * 0.29);
     ctx.restore();
   }
 
@@ -1193,7 +1345,7 @@
     combo = 0;
     colorMatchStreak = 0;
     scoreSavedForRun = false;
-    latestSavedId = null;
+    latestSavedKey = null;
 
     if (saveFeedback) {
       saveFeedback.style.display = 'none';
@@ -1216,7 +1368,7 @@
     modalTitle.textContent = 'OYUN BİTTİ!';
     modalSubtitle.textContent =
       score > 0
-        ? 'Takma adını (nickname) girerek skorunu Küresel İlk 10 tablosuna kaydet!'
+        ? 'Takma adını (nickname) girerek rekorunu Küresel İlk 10 tablosuna kaydet!'
         : 'İğneler birbirine çarptı! Kendi rengindeki dilimleri hedefleyerek tekrar dene.';
 
     endStats.style.display = 'grid';
@@ -1250,6 +1402,7 @@
 
     if (gameState === 'PLAYING') {
       gameState = 'PAUSED';
+      if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
       modalTitle.textContent = 'OYUN DURAKLATILDI';
       modalSubtitle.textContent = 'Küresel skor tablosuna göz atıyorsun. Kaldığın yerden devam edebilirsin.';
       endStats.style.display = 'none';
@@ -1289,6 +1442,7 @@
     if (gameState === 'PAUSED') {
       mainOverlay.classList.add('hidden');
       gameState = 'PLAYING';
+      updateTimerUI();
     } else {
       startNewGame();
     }
@@ -1322,13 +1476,6 @@
       fetchGlobalScores();
     });
   }
-
-  btnClearScores.addEventListener('click', () => {
-    localStorage.removeItem(STORAGE_KEY_SCORES);
-    latestSavedId = null;
-    renderScoreboard();
-    updateHudBest();
-  });
 
   // Main Animation Loop
   let lastFrameTime = performance.now();
