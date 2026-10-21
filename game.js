@@ -171,10 +171,10 @@
   let latestSavedKey = null;
   let cachedCloudScores = [];
 
-  // Per-Pin Shot Clock State (İğne Başına Süre Sınırı: ~3.2 - 4.2 saniye)
-  let pinTimeLimit = 4.0;
-  let pinTimeLeft = 4.0;
-  let thrownPinTimeLeft = 4.0;
+  // Per-Pin Shot Clock State (İğne Başına Süre Sınırı: ~8.5 - 14.5 saniye, çark hızına duyarlı)
+  let pinTimeLimit = 12.2;
+  let pinTimeLeft = 12.2;
+  let thrownPinTimeLeft = 12.2;
 
   // Geometry
   let wheel = {
@@ -581,12 +581,27 @@
     return wheel.palette[getSegmentIndexAtAngle(relativeAngle)];
   }
 
-  // Her bir iğne için fırlatma süresi (3.2 - 4.2 saniye arası, çark hızına uyumlu)
-  function calculatePinTimeLimit(lvl) {
-    // İlk seviyelerde çark daha yavaş döndüğü için doğru rengi beklemeye ~4.2sn, hızlandıkça ~3.3sn
-    const baseSec = Math.max(3.3, 4.2 - (lvl - 1) * 0.08);
-    const patternBonus = wheel.pattern === 'STEP_SEQUENCE' ? 0.3 : 0;
-    return Number((baseSec + patternBonus).toFixed(1));
+  // Her bir iğne için çarkın dönüş hızına, yön değişimine ve rengin gelme süresine göre dinamik süre (~8.5 - 14.5 sn)
+  function calculatePinTimeLimit(lvl, obstacles = 1) {
+    let patternEfficiency = 1.0;
+    let extraReverseAllowance = 0;
+
+    if (wheel.pattern === 'GENTLE_WAVE') {
+      patternEfficiency = 0.82;
+    } else if (wheel.pattern === 'STEP_SEQUENCE') {
+      // Yön değiştiren veya duraksayan bölümlerde rengin hedefe gelmesi için ek tolerans
+      patternEfficiency = 0.72;
+      extraReverseAllowance = 2.0;
+    }
+
+    const effectiveRadPerSec = Math.max(0.45, wheel.baseSpeed * 60 * patternEfficiency);
+    const secondsPerFullTurn = (Math.PI * 2) / effectiveRadPerSec;
+
+    // Doğru rengin gelmesini ve uygun boşluğu rahatça bekleyebilmek için ~1.5 tam tur + engel payı tanı
+    const turnsAllowance = 1.45 + obstacles * 0.08;
+    const calculatedSec = secondsPerFullTurn * turnsAllowance + extraReverseAllowance + 1.2;
+
+    return Number(Math.max(8.5, Math.min(14.5, calculatedSec)).toFixed(1));
   }
 
   // Balanced & Gradual Progressive Difficulty Configuration (Full 360° Coverage)
@@ -693,8 +708,8 @@
     pinsRemaining = totalPinsForLevel;
     activePin = null;
 
-    // İğne başına fırlatma süresini ayarla ve başlat
-    pinTimeLimit = calculatePinTimeLimit(lvl);
+    // İğne başına fırlatma süresini çark hızı ve engel sayısına göre dinamik ayarla ve başlat
+    pinTimeLimit = calculatePinTimeLimit(lvl, obstacleCount);
     resetPinTimer();
 
     pinQueueColors = [];
