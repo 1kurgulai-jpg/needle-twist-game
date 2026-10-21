@@ -574,6 +574,30 @@
     return wheel.palette[getSegmentIndexAtAngle(relativeAngle)];
   }
 
+  // Çarkın dönüş hızına, hareket desenine, engel yoğunluğuna ve toplam iğne sayısına göre dinamik süre hesabı
+  function calculateDynamicLevelTime(pinCount, obstacles) {
+    let patternEfficiency = 1.0;
+    let pauseAllowancePerTurn = 0;
+
+    if (wheel.pattern === 'GENTLE_WAVE') {
+      patternEfficiency = 0.82;
+    } else if (wheel.pattern === 'STEP_SEQUENCE') {
+      patternEfficiency = 0.74;
+      pauseAllowancePerTurn = 0.35;
+    }
+
+    // Çark yavaşken 1 tam tur süresi uzar -> oyuncuya renk/boşluk beklemesi için daha esnek süre verilir
+    const effectiveRadPerSec = Math.max(0.45, wheel.baseSpeed * 60 * patternEfficiency);
+    const secondsPerFullTurn = (Math.PI * 2) / effectiveRadPerSec + pauseAllowancePerTurn;
+
+    // İğne başına gereken tur oranı (çark üzerindeki engel sayısı arttıkça nişan alma payı artar)
+    const turnsPerPin = 0.42 + obstacles * 0.035;
+    const comfortBuffer = 6;
+
+    const totalSeconds = comfortBuffer + pinCount * turnsPerPin * secondsPerFullTurn;
+    return Math.round(Math.max(18, totalSeconds));
+  }
+
   // Balanced & Gradual Progressive Difficulty Configuration (Full 360° Coverage)
   function configureLevel(lvl) {
     wheel.palette = WHEEL_PALETTES[(lvl - 1) % WHEEL_PALETTES.length];
@@ -678,8 +702,8 @@
     pinsRemaining = totalPinsForLevel;
     activePin = null;
 
-    // Bölüme ve iğne sayısına göre artan Zaman Bonusu süresi (örn. Sv1: ~24sn, Sv10: ~38sn)
-    levelTimeLimit = Math.round(13 + totalPinsForLevel * 1.65 + Math.min(lvl * 0.7, 10));
+    // Çarkın dönüş hızına ve atılacak toplam iğne sayısına göre dinamik süre hesabı
+    levelTimeLimit = calculateDynamicLevelTime(totalPinsForLevel, obstacleCount);
     levelTimeLeft = levelTimeLimit;
     updateTimerUI();
 
@@ -1213,16 +1237,16 @@
 
     ctx.fillStyle = '#0b1830';
     ctx.beginPath();
-    ctx.arc(0, 0, r * 0.56, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 0.58, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();
 
     // Çark Merkezinde Görsel Zaman Bonusu Halkası (Time Bonus Ring)
     const timeRatio = Math.max(0, Math.min(1, levelTimeLeft / Math.max(1, levelTimeLimit)));
-    const ringRadius = r * 0.55;
+    const ringRadius = r * 0.57;
     ctx.save();
-    ctx.lineWidth = 3.2;
+    ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
     ctx.beginPath();
     ctx.arc(wheel.x, wheel.y, ringRadius, 0, Math.PI * 2);
@@ -1240,16 +1264,20 @@
     }
     ctx.restore();
 
+    // Orta kısım kalan iğne sayısı ve etiketi (kenarlara değmeden tam ortaya şık yerleşim)
     ctx.save();
+    const numFontSize = Math.round(r * (pinsRemaining >= 10 ? 0.31 : 0.35));
+    const labelFontSize = Math.max(7, Math.round(r * 0.102));
+
     ctx.fillStyle = '#ffffff';
-    ctx.font = `900 ${Math.round(r * 0.45)}px system-ui, sans-serif`;
+    ctx.font = `900 ${numFontSize}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(pinsRemaining, wheel.x, wheel.y - 2);
+    ctx.fillText(pinsRemaining, wheel.x, wheel.y - r * 0.08);
 
-    ctx.fillStyle = 'rgba(0, 245, 212, 0.85)';
-    ctx.font = `700 ${Math.round(r * 0.14)}px system-ui, sans-serif`;
-    ctx.fillText('KALAN İĞNE', wheel.x, wheel.y + r * 0.29);
+    ctx.fillStyle = 'rgba(0, 245, 212, 0.88)';
+    ctx.font = `700 ${labelFontSize}px system-ui, sans-serif`;
+    ctx.fillText('KALAN İĞNE', wheel.x, wheel.y + r * 0.2);
     ctx.restore();
   }
 
