@@ -56,6 +56,17 @@
     <!-- Dynamic Difficulty Mode Indicator -->
     <div class="difficulty-banner" id="difficultyBanner">Seviye 1 • Tam Tur Rahat Dönüş</div>
 
+    <!-- Time Bonus Bar -->
+    <div class="timer-bar-wrap" id="timerBarWrap">
+      <div class="timer-bar-header">
+        <span class="timer-label" id="timerLabel">⏱️ Zaman Bonusu</span>
+        <span class="timer-value" id="timerValue">24.0s • +190 P</span>
+      </div>
+      <div class="timer-track">
+        <div class="timer-fill" id="timerFill"></div>
+      </div>
+    </div>
+
     <!-- Main Game Canvas -->
     <canvas id="gameCanvas"></canvas>
 
@@ -104,7 +115,6 @@
             </div>
             <div class="scoreboard-actions">
               <button type="button" class="refresh-btn" id="btnRefreshScores" title="Skorları Yenile">↻ Yenile</button>
-              <button type="button" class="clear-btn" id="btnClearScores" title="Yerel önbelleği sıfırla">Sıfırla</button>
             </div>
           </div>
           <div class="scoreboard-list" id="scoreboardList"></div>
