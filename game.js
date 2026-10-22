@@ -34,20 +34,38 @@
   const btnSound = document.getElementById('btnSound');
   const btnRefreshScores = document.getElementById('btnRefreshScores');
 
-  // Storage & Cloud Leaderboard Endpoints (Yeni Dönem: Tertemiz Tablo & Cihaz Başına Tek Kullanıcı/Rekor)
+  // Storage & Cloud Leaderboard Endpoints (Süresiz Kalıcı Bulut Veritabanı & Cihaz Başına Tek Kullanıcı/Rekor)
   const STORAGE_KEY_SCORES = 'renkli_cark_leaderboard_v3_clean';
   const STORAGE_KEY_LOCKED_NAME = 'renkli_cark_locked_name_v3_clean';
   const STORAGE_KEY_DEVICE_ID = 'renkli_cark_device_id_v3';
   const FIREBASE_DB_URL = window.FIREBASE_DB_URL || '';
+  const PERMANENT_KV_URL = 'https://kvdb.io/JnxQcbRfQWQRLWus8FQzLb/leaderboard_v3_permanent';
   const CLOUD_LEADERBOARD_TOPIC = 'needle_twist_leaderboard_1kurgulai_v3_clean';
   const CLOUD_LEADERBOARD_URL = `https://ntfy.sh/${CLOUD_LEADERBOARD_TOPIC}`;
 
-  // Eski dönem skor tablosu verilerini temizle (Tertemiz yeni dönem başlangıcı)
+  // Başlangıçta sahte/seed skor yok; ancak cihazda dün/bugün oynanmış gerçek oyuncu kaydı varsa koru
   const SEED_GLOBAL_SCORES = [];
+  const LEGACY_SEED_NAMES = new Set(['turkuazusta', 'carkavcisi', 'renkkeskin', 'neonrefleks', 'ignebeyi']);
   try {
+    const rawV2 = localStorage.getItem('renkli_cark_leaderboard_v2');
+    if (rawV2) {
+      const parsedV2 = JSON.parse(rawV2);
+      if (Array.isArray(parsedV2)) {
+        const realV2 = parsedV2.filter(
+          (item) =>
+            item &&
+            item.name &&
+            !String(item.id || '').startsWith('seed-') &&
+            !LEGACY_SEED_NAMES.has(String(item.name).trim().toLocaleLowerCase('tr-TR'))
+        );
+        if (realV2.length > 0) {
+          const existingV3 = JSON.parse(localStorage.getItem(STORAGE_KEY_SCORES) || '[]');
+          localStorage.setItem(STORAGE_KEY_SCORES, JSON.stringify([...existingV3, ...realV2]));
+        }
+      }
+    }
     localStorage.removeItem('renkli_cark_leaderboard_v1');
     localStorage.removeItem('renkli_cark_leaderboard_v2');
-    localStorage.removeItem('renkli_cark_player_name');
   } catch {
     // ignore storage errors
   }
@@ -351,7 +369,14 @@
   function getLockedDeviceName() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_LOCKED_NAME);
-      return saved ? saved.trim().slice(0, 16) : '';
+      if (saved && saved.trim()) return saved.trim().slice(0, 16);
+      const legacyName = localStorage.getItem('renkli_cark_player_name');
+      if (legacyName && legacyName.trim()) {
+        const cleanLegacy = legacyName.trim().slice(0, 16);
+        localStorage.setItem(STORAGE_KEY_LOCKED_NAME, cleanLegacy);
+        return cleanLegacy;
+      }
+      return '';
     } catch {
       return '';
     }
@@ -444,47 +469,130 @@
     return deduplicateByPlayerBest(...scoreArrays).slice(0, 10);
   }
 
+  async function syncPermanentCloudLeaderboard(mergedList, singleEntry = null) {
+    const cleanPayload = {
+      updatedAt: new Date().toISOString(),
+      scores: mergedList.slice(0, 30)
+    };
+
+    const tasks = [];
+
+    // 1. Süresiz Kalıcı KVDB Veritabanına Tam Tabloyu Kaydet (12 saat sınırı YOKTUR)
+    tasks.push(
+      fetch(PERMANENT_KV_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(cleanPayload)
+      })
+    );
+
+    // 2. Canlı Akış Sunucusuna (ntfy) hem tekil skoru hem de tam tablo yedeğini (snapshot) gönder
+    const snapshotObj = singleEntry
+      ? { ...singleEntry, type: 'snapshot', scores: mergedList.slice(0, 20) }
+      : { type: 'snapshot', scores: mergedList.slice(0, 20) };
+
+    tasks.push(
+      fetch(CLOUD_LEADERBOARD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: JSON.stringify(snapshotObj)
+      })
+    );
+
+    if (FIREBASE_DB_URL && singleEntry) {
+      tasks.push(
+        fetch(FIREBASE_DB_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(singleEntry)
+        })
+      );
+    }
+
+    await Promise.allSettled(tasks);
+  }
+
   async function fetchGlobalScores() {
     if (syncBadge) {
       syncBadge.textContent = '⏳ Senkronize...';
     }
 
+    let permanentScores = [];
+    let streamScores = [];
+    let fetchedAnyCloud = false;
+
     try {
-      if (FIREBASE_DB_URL) {
-        const res = await fetch(FIREBASE_DB_URL);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && typeof data === 'object') {
-            cachedCloudScores = Object.values(data);
-          }
-        }
-      } else {
-        const res = await fetch(`${CLOUD_LEADERBOARD_URL}/json?poll=1&since=720h`, {
-          cache: 'no-store'
-        });
-        if (res.ok) {
-          const text = await res.text();
-          const lines = text.split('\n').filter((l) => l.trim().length > 0);
-          const parsed = [];
-          for (const line of lines) {
-            try {
-              const envelope = JSON.parse(line);
-              if (envelope && envelope.event === 'message' && envelope.message) {
-                const scoreObj = JSON.parse(envelope.message);
-                if (scoreObj && typeof scoreObj.score === 'number') {
-                  parsed.push(scoreObj);
-                }
-              }
-            } catch {
-              // skip malformed line
-            }
-          }
-          cachedCloudScores = parsed;
+      const [kvRes, ntfyRes] = await Promise.allSettled([
+        fetch(PERMANENT_KV_URL, { cache: 'no-store' }),
+        fetch(`${CLOUD_LEADERBOARD_URL}/json?poll=1&since=all`, { cache: 'no-store' })
+      ]);
+
+      // 1. Kalıcı Veritabanından (KVDB) Oku
+      if (kvRes.status === 'fulfilled' && kvRes.value.ok) {
+        fetchedAnyCloud = true;
+        const kvData = await kvRes.value.json();
+        if (kvData && Array.isArray(kvData.scores)) {
+          permanentScores = kvData.scores;
+        } else if (Array.isArray(kvData)) {
+          permanentScores = kvData;
         }
       }
 
-      if (syncBadge) {
-        syncBadge.textContent = '🌐 Canlı Küresel';
+      // 2. Canlı Akıştan (ntfy) Hem Tekil Skorları Hem Snapshot Yedeklerini Oku
+      if (ntfyRes.status === 'fulfilled' && ntfyRes.value.ok) {
+        fetchedAnyCloud = true;
+        const text = await ntfyRes.value.text();
+        const lines = text.split('\n').filter((l) => l.trim().length > 0);
+        for (const line of lines) {
+          try {
+            const envelope = JSON.parse(line);
+            if (envelope && envelope.event === 'message' && envelope.message) {
+              const msgObj = JSON.parse(envelope.message);
+              if (msgObj && Array.isArray(msgObj.scores)) {
+                streamScores.push(...msgObj.scores);
+              }
+              if (msgObj && typeof msgObj.score === 'number' && msgObj.name) {
+                streamScores.push(msgObj);
+              }
+            }
+          } catch {
+            // skip malformed line
+          }
+        }
+      }
+
+      if (fetchedAnyCloud) {
+        cachedCloudScores = [...permanentScores, ...streamScores];
+
+        // Tüm kaynakları (Kalıcı Bulut + Canlı Akış + Bu Cihazın Yerel Hafızası) birleştir
+        const mergedAll = deduplicateByPlayerBest();
+        setLocalScores(mergedAll);
+        cachedCloudScores = mergedAll;
+
+        // Eğer bu cihazın yerel hafızasında (örn. 15 saat önce oynanmış) olup kalıcı bulutta eksik/düşük kalan bir rekor varsa otomatik geri yükle!
+        const permanentMap = new Map();
+        for (const p of permanentScores) {
+          if (p && p.name && typeof p.score === 'number') {
+            permanentMap.set(normalizePlayerKey(p.name), Number(p.score) || 0);
+          }
+        }
+
+        const needsCloudRestore = mergedAll.some((item) => {
+          const cloudScore = permanentMap.get(item.playerKey);
+          return cloudScore === undefined || item.score > cloudScore;
+        });
+
+        if (needsCloudRestore && mergedAll.length > 0) {
+          syncPermanentCloudLeaderboard(mergedAll).catch(() => {});
+        }
+
+        if (syncBadge) {
+          syncBadge.textContent = '🌐 Kalıcı Küresel';
+        }
+      } else {
+        if (syncBadge) {
+          syncBadge.textContent = '📱 Çevrimdışı Önbellek';
+        }
       }
     } catch {
       if (syncBadge) {
@@ -548,18 +656,10 @@
       date: new Date().toLocaleDateString('tr-TR')
     };
 
-    // 1. Yerel hafızada aynı cihaza veya aynı isme ait eski kaydı kaldırıp yalnızca yeni en yüksek rekoru kaydet
-    const localList = getLocalScores().filter(
-      (item) => item.deviceId !== deviceId && normalizePlayerKey(item.name) !== playerKey
-    );
-    localList.push(entry);
-    localList.sort((a, b) => b.score - a.score || b.level - a.level);
-    setLocalScores(localList);
-
-    cachedCloudScores = cachedCloudScores.filter(
-      (item) => item.deviceId !== deviceId && normalizePlayerKey(item.name) !== playerKey
-    );
-    cachedCloudScores.push(entry);
+    // 1. Yerel ve önbellek listelerinde aynı cihaza veya aynı isme ait eski kaydı kaldırıp yalnızca yeni en yüksek rekoru tut
+    const mergedList = deduplicateByPlayerBest([entry]);
+    setLocalScores(mergedList);
+    cachedCloudScores = mergedList;
 
     renderScoreboard();
     updateHudBest();
@@ -573,26 +673,14 @@
       level: entry.level
     });
 
-    // 2. Küresel Bulut Veritabanına Gönder
+    // 2. Kalıcı Küresel Bulut Veritabanına Gönder (12 saat sınırı olmadan kalıcı saklanır)
     if (syncBadge) {
       syncBadge.textContent = '⏳ Gönderiliyor...';
     }
     try {
-      if (FIREBASE_DB_URL) {
-        await fetch(FIREBASE_DB_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(entry)
-        });
-      } else {
-        await fetch(CLOUD_LEADERBOARD_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-          body: JSON.stringify(entry)
-        });
-      }
+      await syncPermanentCloudLeaderboard(mergedList, entry);
       if (syncBadge) {
-        syncBadge.textContent = '🌐 Canlı Küresel';
+        syncBadge.textContent = '🌐 Kalıcı Küresel';
       }
     } catch {
       if (syncBadge) {
@@ -603,8 +691,8 @@
     if (saveFeedback) {
       saveFeedback.style.display = 'block';
       saveFeedback.textContent = existingRecord
-        ? `🏆 Yeni Kişisel Rekor! "${cleanName}" satırı ${existingRecord.score} P ➔ ${entry.score} P olarak otomatik güncellendi!`
-        : `✅ Cihaz kullanıcısı "${cleanName}" (${entry.score} P) olarak kaydedildi! Bundan sonraki rekorların otomatik güncellenecek.`;
+        ? `🏆 Yeni Kişisel Rekor! "${cleanName}" satırı ${existingRecord.score} P ➔ ${entry.score} P olarak kalıcı güncellendi!`
+        : `✅ Cihaz kullanıcısı "${cleanName}" (${entry.score} P) kalıcı tabloya kaydedildi!`;
     }
 
     renderScoreboard();
