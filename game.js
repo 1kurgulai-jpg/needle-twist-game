@@ -43,6 +43,15 @@
   const CLOUD_LEADERBOARD_TOPIC = 'needle_twist_leaderboard_1kurgulai_v3_clean';
   const CLOUD_LEADERBOARD_URL = `https://ntfy.sh/${CLOUD_LEADERBOARD_TOPIC}`;
 
+  function safeLower(str) {
+    const s = String(str || '').trim();
+    try {
+      return s.toLocaleLowerCase('tr-TR');
+    } catch (err) {
+      return s.toLowerCase();
+    }
+  }
+
   // Başlangıçta sahte/seed skor yok; ancak cihazda dün/bugün oynanmış gerçek oyuncu kaydı varsa koru
   const SEED_GLOBAL_SCORES = [];
   const LEGACY_SEED_NAMES = new Set(['turkuazusta', 'carkavcisi', 'renkkeskin', 'neonrefleks', 'ignebeyi']);
@@ -56,7 +65,7 @@
             item &&
             item.name &&
             !String(item.id || '').startsWith('seed-') &&
-            !LEGACY_SEED_NAMES.has(String(item.name).trim().toLocaleLowerCase('tr-TR'))
+            !LEGACY_SEED_NAMES.has(safeLower(item.name))
         );
         if (realV2.length > 0) {
           const existingV3 = JSON.parse(localStorage.getItem(STORAGE_KEY_SCORES) || '[]');
@@ -66,8 +75,8 @@
     }
     localStorage.removeItem('renkli_cark_leaderboard_v1');
     localStorage.removeItem('renkli_cark_leaderboard_v2');
-  } catch {
-    // ignore storage errors
+  } catch (err) {
+    // ignore storage errors on restricted mobile browsers
   }
 
   // Google Analytics (GA4) Yardımcı Fonksiyonu
@@ -80,7 +89,7 @@
           timestamp: new Date().toISOString()
         });
       }
-    } catch {
+    } catch (err) {
       // Ad-blocker veya çevrimdışı durumda sessizce devam et
     }
   }
@@ -129,7 +138,7 @@
     }
   ];
 
-  // Mobil Titreşim (Haptic Feedback) & Web Audio API Ses Sentezleyici
+  // Mobil Titreşim (Haptic Feedback) & Web Audio API Ses Sentezleyici (Tam Hata Korumalı Fallback)
   class SoundFX {
     constructor() {
       this.enabled = true;
@@ -137,12 +146,19 @@
     }
 
     init() {
-      if (!this.ctx) {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (AudioCtx) this.ctx = new AudioCtx();
-      }
-      if (this.ctx && this.ctx.state === 'suspended') {
-        this.ctx.resume();
+      try {
+        if (!this.ctx) {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (AudioCtx) this.ctx = new AudioCtx();
+        }
+        if (this.ctx && this.ctx.state === 'suspended' && typeof this.ctx.resume === 'function') {
+          const resumePromise = this.ctx.resume();
+          if (resumePromise && typeof resumePromise.catch === 'function') {
+            resumePromise.catch(() => {});
+          }
+        }
+      } catch (err) {
+        // Ses motoru başlatılamazsa oyunu kilitlemeden sessizce devam et
       }
     }
 
@@ -157,33 +173,37 @@
         if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
           navigator.vibrate(pattern);
         }
-      } catch {
+      } catch (err) {
         // Desteklemeyen tarayıcılarda sessizce devam et
       }
     }
 
     playTone(freq, type, duration, gainVal = 0.15, slideFreq = null) {
       if (!this.enabled) return;
-      this.init();
-      if (!this.ctx) return;
+      try {
+        this.init();
+        if (!this.ctx) return;
 
-      const now = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
+        const now = Math.max(0, this.ctx.currentTime || 0);
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
 
-      osc.type = type;
-      osc.frequency.setValueAtTime(freq, now);
-      if (slideFreq) {
-        osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideFreq), now + duration);
+        osc.type = type;
+        osc.frequency.setValueAtTime(Math.max(20, freq), now);
+        if (slideFreq) {
+          osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideFreq), now + duration);
+        }
+
+        gain.gain.setValueAtTime(Math.max(0.001, gainVal), now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + duration);
+      } catch (err) {
+        // Mobil tarayıcı ses kısıtlamalarında oyunun çökmesini önle
       }
-
-      gain.gain.setValueAtTime(gainVal, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-      osc.start(now);
-      osc.stop(now + duration);
     }
 
     throwPin() {
@@ -195,40 +215,44 @@
     pinHit(combo = 1) {
       this.vibrate(14);
       if (!this.enabled) return;
-      this.init();
-      if (!this.ctx) return;
+      try {
+        this.init();
+        if (!this.ctx) return;
 
-      const now = this.ctx.currentTime;
+        const now = Math.max(0, this.ctx.currentTime || 0);
 
-      // 1. Katman: Tok gövde darbesi (195Hz -> 56Hz hızlı pitch düşüşü, 52ms)
-      const bodyOsc = this.ctx.createOscillator();
-      const bodyGain = this.ctx.createGain();
-      bodyOsc.type = 'triangle';
-      bodyOsc.frequency.setValueAtTime(195, now);
-      bodyOsc.frequency.exponentialRampToValueAtTime(56, now + 0.052);
-      bodyGain.gain.setValueAtTime(0.24, now);
-      bodyGain.gain.exponentialRampToValueAtTime(0.001, now + 0.052);
-      bodyOsc.connect(bodyGain);
-      bodyGain.connect(this.ctx.destination);
-      bodyOsc.start(now);
-      bodyOsc.stop(now + 0.052);
+        // 1. Katman: Tok gövde darbesi (195Hz -> 56Hz hızlı pitch düşüşü, 52ms)
+        const bodyOsc = this.ctx.createOscillator();
+        const bodyGain = this.ctx.createGain();
+        bodyOsc.type = 'triangle';
+        bodyOsc.frequency.setValueAtTime(195, now);
+        bodyOsc.frequency.exponentialRampToValueAtTime(56, now + 0.052);
+        bodyGain.gain.setValueAtTime(0.24, now);
+        bodyGain.gain.exponentialRampToValueAtTime(0.001, now + 0.052);
+        bodyOsc.connect(bodyGain);
+        bodyGain.connect(this.ctx.destination);
+        bodyOsc.start(now);
+        bodyOsc.stop(now + 0.052);
 
-      // 2. Katman: Net mekanik saplanma "tık" transienti (680Hz -> 210Hz, 22ms)
-      const clickOsc = this.ctx.createOscillator();
-      const clickGain = this.ctx.createGain();
-      clickOsc.type = 'sine';
-      clickOsc.frequency.setValueAtTime(680, now);
-      clickOsc.frequency.exponentialRampToValueAtTime(210, now + 0.022);
-      clickGain.gain.setValueAtTime(0.14, now);
-      clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.022);
-      clickOsc.connect(clickGain);
-      clickGain.connect(this.ctx.destination);
-      clickOsc.start(now);
-      clickOsc.stop(now + 0.022);
+        // 2. Katman: Net mekanik saplanma "tık" transienti (680Hz -> 210Hz, 22ms)
+        const clickOsc = this.ctx.createOscillator();
+        const clickGain = this.ctx.createGain();
+        clickOsc.type = 'sine';
+        clickOsc.frequency.setValueAtTime(680, now);
+        clickOsc.frequency.exponentialRampToValueAtTime(210, now + 0.022);
+        clickGain.gain.setValueAtTime(0.14, now);
+        clickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.022);
+        clickOsc.connect(clickGain);
+        clickGain.connect(this.ctx.destination);
+        clickOsc.start(now);
+        clickOsc.stop(now + 0.022);
 
-      // 3. Katman: Göz/kulak yormayan yumuşak kombo rezonansı
-      const harmonicFreq = Math.min(310 + combo * 20, 540);
-      this.playTone(harmonicFreq, 'sine', 0.048, 0.06, harmonicFreq * 1.12);
+        // 3. Katman: Göz/kulak yormayan yumuşak kombo rezonansı
+        const harmonicFreq = Math.min(310 + combo * 20, 540);
+        this.playTone(harmonicFreq, 'sine', 0.048, 0.06, harmonicFreq * 1.12);
+      } catch (err) {
+        // Ses sentezleme hatasında oyunu kesintisiz sürdür
+      }
     }
 
     colorMatch(streak = 1) {
@@ -345,11 +369,20 @@
 
   // Benzersiz Kullanıcı Adı (Nickname) Normalizasyonu & Cihaz Başına Tek Kullanıcı Kilidi
   function normalizePlayerKey(name) {
-    return (
-      String(name || 'Oyuncu')
-        .trim()
-        .slice(0, 16)
-        .toLocaleLowerCase('tr-TR') || 'oyuncu'
+    return safeLower(String(name || 'Oyuncu').trim().slice(0, 16)) || 'oyuncu';
+  }
+
+  function safeAllSettled(promises) {
+    if (typeof Promise.allSettled === 'function') {
+      return Promise.allSettled(promises);
+    }
+    return Promise.all(
+      promises.map((p) =>
+        Promise.resolve(p).then(
+          (value) => ({ status: 'fulfilled', value }),
+          (reason) => ({ status: 'rejected', reason })
+        )
+      )
     );
   }
 
@@ -361,7 +394,7 @@
         localStorage.setItem(STORAGE_KEY_DEVICE_ID, devId);
       }
       return devId;
-    } catch {
+    } catch (err) {
       return 'dev_local_fallback';
     }
   }
@@ -377,7 +410,7 @@
         return cleanLegacy;
       }
       return '';
-    } catch {
+    } catch (err) {
       return '';
     }
   }
@@ -389,7 +422,7 @@
     if (!clean) return;
     try {
       localStorage.setItem(STORAGE_KEY_LOCKED_NAME, clean);
-    } catch {
+    } catch (err) {
       // ignore storage errors
     }
   }
@@ -398,16 +431,19 @@
   function getLocalScores() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_SCORES);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
       return [];
     }
   }
 
   function setLocalScores(list) {
     try {
-      localStorage.setItem(STORAGE_KEY_SCORES, JSON.stringify(list.slice(0, 30)));
-    } catch {
+      if (Array.isArray(list)) {
+        localStorage.setItem(STORAGE_KEY_SCORES, JSON.stringify(list.slice(0, 30)));
+      }
+    } catch (err) {
       // ignore quota errors
     }
   }
@@ -415,7 +451,18 @@
   function deduplicateByPlayerBest(...scoreArrays) {
     const myDeviceId = getDeviceId();
     const myLockedName = getLockedDeviceName();
-    const combined = [...SEED_GLOBAL_SCORES, ...cachedCloudScores, ...getLocalScores(), ...scoreArrays.flat()];
+    const extraFlat = [];
+    for (let i = 0; i < scoreArrays.length; i++) {
+      const arr = scoreArrays[i];
+      if (Array.isArray(arr)) {
+        for (let j = 0; j < arr.length; j++) {
+          extraFlat.push(arr[j]);
+        }
+      } else if (arr) {
+        extraFlat.push(arr);
+      }
+    }
+    const combined = [...SEED_GLOBAL_SCORES, ...cachedCloudScores, ...getLocalScores(), ...extraFlat];
 
     // 1. Aşama: Aynı cihazdan (deviceId) gelen tüm skorları tek bir kayıtta birleştir (en yüksek skoru tut)
     const uniqueByDevice = new Map();
@@ -509,7 +556,7 @@
       );
     }
 
-    await Promise.allSettled(tasks);
+    await safeAllSettled(tasks);
   }
 
   async function fetchGlobalScores() {
@@ -522,13 +569,13 @@
     let fetchedAnyCloud = false;
 
     try {
-      const [kvRes, ntfyRes] = await Promise.allSettled([
+      const [kvRes, ntfyRes] = await safeAllSettled([
         fetch(PERMANENT_KV_URL, { cache: 'no-store' }),
         fetch(`${CLOUD_LEADERBOARD_URL}/json?poll=1&since=all`, { cache: 'no-store' })
       ]);
 
       // 1. Kalıcı Veritabanından (KVDB) Oku
-      if (kvRes.status === 'fulfilled' && kvRes.value.ok) {
+      if (kvRes.status === 'fulfilled' && kvRes.value && kvRes.value.ok) {
         fetchedAnyCloud = true;
         const kvData = await kvRes.value.json();
         if (kvData && Array.isArray(kvData.scores)) {
@@ -539,7 +586,7 @@
       }
 
       // 2. Canlı Akıştan (ntfy) Hem Tekil Skorları Hem Snapshot Yedeklerini Oku
-      if (ntfyRes.status === 'fulfilled' && ntfyRes.value.ok) {
+      if (ntfyRes.status === 'fulfilled' && ntfyRes.value && ntfyRes.value.ok) {
         fetchedAnyCloud = true;
         const text = await ntfyRes.value.text();
         const lines = text.split('\n').filter((l) => l.trim().length > 0);
@@ -555,7 +602,7 @@
                 streamScores.push(msgObj);
               }
             }
-          } catch {
+          } catch (err) {
             // skip malformed line
           }
         }
@@ -594,7 +641,7 @@
           syncBadge.textContent = '📱 Çevrimdışı Önbellek';
         }
       }
-    } catch {
+    } catch (err) {
       if (syncBadge) {
         syncBadge.textContent = '📱 Çevrimdışı Önbellek';
       }
@@ -682,7 +729,7 @@
       if (syncBadge) {
         syncBadge.textContent = '🌐 Kalıcı Küresel';
       }
-    } catch {
+    } catch (err) {
       if (syncBadge) {
         syncBadge.textContent = '📱 Yerel Kaydedildi';
       }
@@ -699,9 +746,13 @@
   }
 
   function updateHudBest() {
-    const top10 = mergeAndSortTop10();
-    const best = top10.length > 0 ? Math.max(top10[0].score, score) : score;
-    hudBest.textContent = best;
+    try {
+      const top10 = mergeAndSortTop10();
+      const best = top10.length > 0 ? Math.max(top10[0].score, score) : score;
+      if (hudBest) hudBest.textContent = best;
+    } catch (err) {
+      if (hudBest) hudBest.textContent = score;
+    }
   }
 
   function updateHudLives() {
@@ -713,17 +764,26 @@
   // Her 10 Seviyede Bir Arka Plan & Çark Renk Temasını Canlı Neon Paletine Geçir
   function applyThemeForLevel(lvl) {
     const chapterIndex = Math.floor((Math.max(1, lvl) - 1) / 10) % CHAPTER_THEMES.length;
-    const theme = CHAPTER_THEMES[chapterIndex];
+    const theme = CHAPTER_THEMES[chapterIndex] || CHAPTER_THEMES[0];
     currentTheme = theme;
 
     wheel.palette = theme.palette;
     wheel.hubColor = theme.hubColor;
     wheel.glowColor = theme.accentColor;
 
-    const rootStyle = document.documentElement.style;
-    rootStyle.setProperty('--bg-dark', theme.bgDark);
-    rootStyle.setProperty('--bg-accent', theme.bgAccent);
-    rootStyle.setProperty('--turquoise', theme.accentColor);
+    try {
+      const rootStyle = document.documentElement && document.documentElement.style;
+      if (rootStyle && typeof rootStyle.setProperty === 'function') {
+        rootStyle.setProperty('--bg-dark', theme.bgDark);
+        rootStyle.setProperty('--bg-accent', theme.bgAccent);
+        rootStyle.setProperty('--turquoise', theme.accentColor);
+      }
+      if (document.body && document.body.style) {
+        document.body.style.backgroundColor = theme.bgDark;
+      }
+    } catch (err) {
+      // CSS değişkeni desteklemeyen eski tarayıcılarda çökmeden devam et
+    }
     return theme;
   }
 
@@ -824,32 +884,51 @@
     timerValue.textContent = `${pinTimeLeft.toFixed(1)}s • ⚡+${bonusPreview} P`;
   }
 
-  // Responsive Fullscreen Canvas Setup
+  // Responsive Fullscreen Canvas Setup (Mobil WebView & Safari Güvenli Boyutlandırma)
   function resizeCanvas() {
-    const rect = canvas.getBoundingClientRect();
-    width = rect.width || window.innerWidth;
-    height = rect.height || window.innerHeight;
-    dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    try {
+      const rect = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
+      const fallbackW = window.innerWidth || document.documentElement.clientWidth || 360;
+      const fallbackH = window.innerHeight || document.documentElement.clientHeight || 640;
 
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      width = Math.max(280, rect.width || fallbackW);
+      height = Math.max(420, rect.height || fallbackH);
+      dpr = Math.min(Math.max(1, window.devicePixelRatio || 1), 2.5);
 
-    const topHudBottom = 132;
-    const usableHeight = Math.max(300, height - topHudBottom);
-    const minDim = Math.min(width, usableHeight * 0.92);
+      canvas.width = Math.floor(width * dpr);
+      canvas.height = Math.floor(height * dpr);
+      if (typeof ctx.setTransform === 'function') {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      } else if (typeof ctx.resetTransform === 'function') {
+        ctx.resetTransform();
+        ctx.scale(dpr, dpr);
+      }
 
-    wheel.radius = Math.max(46, Math.min(76, minDim * 0.16));
-    wheel.pinLength = Math.max(38, Math.min(60, minDim * 0.128));
-    wheel.pinHeadRadius = Math.max(6.5, Math.min(8.6, minDim * 0.018));
+      const topHudBottom = 132;
+      const usableHeight = Math.max(300, height - topHudBottom);
+      const minDim = Math.min(width, usableHeight * 0.92);
 
-    wheel.x = width / 2;
-    const minWheelY = topHudBottom + wheel.radius + wheel.pinLength + 12;
-    const idealWheelY = topHudBottom + usableHeight * 0.34;
-    wheel.y = Math.max(minWheelY, idealWheelY);
+      wheel.radius = Math.max(46, Math.min(76, minDim * 0.16));
+      wheel.pinLength = Math.max(38, Math.min(60, minDim * 0.128));
+      wheel.pinHeadRadius = Math.max(6.5, Math.min(8.6, minDim * 0.018));
+
+      wheel.x = width / 2;
+      const minWheelY = topHudBottom + wheel.radius + wheel.pinLength + 12;
+      const idealWheelY = topHudBottom + usableHeight * 0.34;
+      wheel.y = Math.max(minWheelY, idealWheelY);
+    } catch (err) {
+      width = width || 360;
+      height = height || 640;
+      wheel.x = width / 2;
+      wheel.y = height * 0.42;
+    }
   }
 
   window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('orientationchange', () => {
+    setTimeout(resizeCanvas, 120);
+  });
+  window.addEventListener('load', resizeCanvas);
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', resizeCanvas);
   }
@@ -1876,15 +1955,30 @@
     }
   }
 
-  // Event Listeners (Touch, Pointer, Keyboard)
-  canvas.addEventListener(
-    'pointerdown',
-    (e) => {
-      e.preventDefault();
+  // Event Listeners (Touch, Pointer, Keyboard - Eski & Yeni Mobil Tarayıcı Uyumlu)
+  if (window.PointerEvent) {
+    canvas.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        throwPin();
+      },
+      { passive: false }
+    );
+  } else {
+    canvas.addEventListener(
+      'touchstart',
+      (e) => {
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        throwPin();
+      },
+      { passive: false }
+    );
+    canvas.addEventListener('mousedown', (e) => {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
       throwPin();
-    },
-    { passive: false }
-  );
+    });
+  }
 
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'Enter') {
@@ -1892,45 +1986,53 @@
       if (gameState === 'PLAYING') {
         e.preventDefault();
         throwPin();
-      } else if (!mainOverlay.classList.contains('hidden') && e.code === 'Enter') {
+      } else if (mainOverlay && !mainOverlay.classList.contains('hidden') && e.code === 'Enter') {
         e.preventDefault();
-        btnStartGame.click();
+        if (btnStartGame) btnStartGame.click();
       }
     }
   });
 
-  btnStartGame.addEventListener('click', () => {
-    if (gameState === 'PAUSED') {
-      mainOverlay.classList.add('hidden');
-      gameState = 'PLAYING';
-      updateTimerUI();
-    } else {
-      startNewGame();
-    }
-  });
+  if (btnStartGame) {
+    btnStartGame.addEventListener('click', () => {
+      if (gameState === 'PAUSED') {
+        if (mainOverlay) mainOverlay.classList.add('hidden');
+        gameState = 'PLAYING';
+        updateTimerUI();
+      } else {
+        startNewGame();
+      }
+    });
+  }
 
-  btnScoreboard.addEventListener('click', (e) => {
-    e.stopPropagation();
-    openScoreboardModal();
-  });
+  if (btnScoreboard) {
+    btnScoreboard.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openScoreboardModal();
+    });
+  }
 
-  btnSound.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const on = sfx.toggle();
-    btnSound.textContent = on ? '🔊' : '🔇';
-  });
+  if (btnSound) {
+    btnSound.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const on = sfx.toggle();
+      btnSound.textContent = on ? '🔊' : '🔇';
+    });
+  }
 
-  saveScoreForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (scoreSavedForRun) return;
-    scoreSavedForRun = true;
-    if (btnSubmitScore) {
-      btnSubmitScore.disabled = true;
-      btnSubmitScore.textContent = 'Kaydediliyor...';
-    }
-    saveScoreForm.style.display = 'none';
-    await saveScoreEntry(playerNameInput.value, score, level);
-  });
+  if (saveScoreForm) {
+    saveScoreForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (scoreSavedForRun) return;
+      scoreSavedForRun = true;
+      if (btnSubmitScore) {
+        btnSubmitScore.disabled = true;
+        btnSubmitScore.textContent = 'Kaydediliyor...';
+      }
+      saveScoreForm.style.display = 'none';
+      await saveScoreEntry(playerNameInput ? playerNameInput.value : 'Oyuncu', score, level);
+    });
+  }
 
   if (btnRefreshScores) {
     btnRefreshScores.addEventListener('click', () => {
@@ -1938,23 +2040,34 @@
     });
   }
 
-  // Main Animation Loop
-  let lastFrameTime = performance.now();
+  // Main Animation Loop (Hata Korumalı - Oyunun Beyaz Ekranda Kalmasını veya Donmasını Önler)
+  let lastFrameTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
   function loop(now) {
-    const dt = Math.min((now - lastFrameTime) / 1000, 0.05);
-    lastFrameTime = now;
+    try {
+      const currentNow =
+        typeof now === 'number' ? now : typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      const rawDt = (currentNow - lastFrameTime) / 1000;
+      const dt = Number.isFinite(rawDt) && rawDt > 0 ? Math.min(rawDt, 0.05) : 0.016;
+      lastFrameTime = currentNow;
 
-    update(dt);
-    draw();
+      update(dt);
+      draw();
+    } catch (err) {
+      // Tek bir karede hata oluşsa bile oyun döngüsünü kesintisiz sürdür
+    }
     requestAnimationFrame(loop);
   }
 
-  // Initialize
-  resizeCanvas();
-  updateHudLives();
-  configureLevel(1);
-  renderScoreboard();
-  updateHudBest();
-  fetchGlobalScores();
+  // Initialize (Güvenli Başlatma)
+  try {
+    resizeCanvas();
+    updateHudLives();
+    configureLevel(1);
+    renderScoreboard();
+    updateHudBest();
+    fetchGlobalScores();
+  } catch (err) {
+    // Başlatma sırasında beklenmeyen bir depolama/tarayıcı hatası olursa varsayılanlarla devam et
+  }
   requestAnimationFrame(loop);
 })();
