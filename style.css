@@ -27,12 +27,18 @@
 
 html, body {
   position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   width: 100%;
   height: 100%;
+  height: 100vh;
   height: 100dvh;
   overflow: hidden;
   overscroll-behavior: none;
+  background-color: #071324;
   background: radial-gradient(circle at 50% 32%, var(--bg-accent), var(--bg-dark) 82%);
   transition: background 0.85s ease;
   font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
@@ -44,6 +50,7 @@ html, body {
   position: relative;
   width: 100%;
   height: 100%;
+  height: 100vh;
   height: 100dvh;
   max-width: 540px;
   margin: 0 auto;
@@ -56,7 +63,10 @@ html, body {
 @media (max-width: 600px) {
   #game-container {
     max-width: 100%;
+    width: 100%;
     width: 100vw;
+    height: 100%;
+    height: 100vh;
     height: 100dvh;
     box-shadow: none;
   }
@@ -189,10 +199,13 @@ html, body {
   top: calc(95px + var(--safe-top));
   left: 50%;
   transform: translateX(-50%);
+  width: 82%;
+  max-width: 310px;
   width: min(82%, 310px);
   background: rgba(10, 24, 46, 0.76);
   border: 1px solid rgba(0, 245, 212, 0.24);
   backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   border-radius: 12px;
   padding: 5px 10px 6px;
   pointer-events: none;
@@ -254,6 +267,10 @@ html, body {
 /* Overlays / Modals */
 .overlay {
   position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   background: rgba(6, 13, 28, 0.82);
   backdrop-filter: blur(10px);
@@ -275,6 +292,7 @@ html, body {
 .modal-card {
   width: 100%;
   max-width: 405px;
+  max-height: 92vh;
   max-height: 92dvh;
   overflow-y: auto;
   background: linear-gradient(160deg, rgba(16, 36, 68, 0.97), rgba(9, 20, 42, 0.99));
@@ -324,7 +342,9 @@ html, body {
 .game-title {
   font-size: 26px;
   font-weight: 900;
+  color: var(--turquoise);
   background: linear-gradient(90deg, var(--turquoise), var(--turquoise-bright), var(--gold));
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   margin-bottom: 5px;
