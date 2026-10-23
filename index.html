@@ -1,37 +1,41 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="tr" style="background-color: #071324;">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="theme-color" content="#0a1628" />
+  <meta name="theme-color" content="#071324" />
   <title>Renkli Çark - İğne Saplama Oyunu</title>
 
   <!-- Web Sitesi İkonu (Favicon) ve Mobil Ana Ekran İkonu (Apple Touch Icon) -->
-  <link rel="icon" type="image/png" sizes="512x512" href="assets/images/logo.png" />
-  <link rel="shortcut icon" type="image/png" href="assets/images/logo.png" />
-  <link rel="apple-touch-icon" sizes="180x180" href="assets/images/logo.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="assets/images/logo.png?v=20261023_v4" />
+  <link rel="shortcut icon" type="image/png" href="assets/images/logo.png?v=20261023_v4" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/images/logo.png?v=20261023_v4" />
 
   <!-- Google Analytics (GA4) Global Site Etiketi (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-9NV6P1MDQQ"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag() { dataLayer.push(arguments); }
-    gtag('js', new Date());
-
-    window.GA_MEASUREMENT_ID = 'G-9NV6P1MDQQ';
-    gtag('config', 'G-9NV6P1MDQQ', {
-      page_title: 'Renkli Çark - Needle Twist Game',
-      page_location: window.location.href,
-      send_page_view: true
-    });
+    try {
+      gtag('js', new Date());
+      window.GA_MEASUREMENT_ID = 'G-9NV6P1MDQQ';
+      gtag('config', 'G-9NV6P1MDQQ', {
+        page_title: 'Renkli Çark - Needle Twist Game',
+        page_location: window.location.href,
+        send_page_view: true
+      });
+    } catch (e) {}
   </script>
 
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=20261023_v4" />
 </head>
-<body>
+<body style="background-color: #071324; color: #ffffff;">
   <div id="game-container">
     <!-- Top HUD -->
     <header class="hud">
@@ -78,7 +82,12 @@
     <div class="overlay" id="mainOverlay">
       <div class="modal-card">
         <div class="modal-logo-wrap" id="modalLogoWrap">
-          <img src="assets/images/logo.png" alt="Renkli Çark Logo" class="modal-logo" />
+          <img
+            src="assets/images/logo.png?v=20261023_v4"
+            alt="Renkli Çark Logo"
+            class="modal-logo"
+            onerror="this.style.display='none'; if(this.parentElement) this.parentElement.style.display='none';"
+          />
         </div>
         <h1 class="game-title" id="modalTitle">RENKLİ ÇARK</h1>
         <p class="modal-subtitle" id="modalSubtitle">
@@ -129,6 +138,6 @@
     </div>
   </div>
 
-  <script src="game.js"></script>
+  <script src="game.js?v=20261023_v4"></script>
 </body>
 </html>
