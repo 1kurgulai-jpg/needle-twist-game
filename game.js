@@ -4,8 +4,15 @@
  */
 
 (() => {
+  const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+  try {
+    if (isAndroid && document.documentElement) {
+      document.documentElement.classList.add('is-android');
+    }
+  } catch (err) {}
+
   const canvas = document.getElementById('gameCanvas');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: true });
 
   // UI Elements
   const hudScore = document.getElementById('hudScore');
@@ -844,47 +851,61 @@
     return '#ff3366';
   }
 
+  let lastTimerText = '';
+  let lastTimerTier = '';
+  let lastPulseLow = false;
+
   function resetPinTimer() {
     pinTimeLeft = pinTimeLimit;
     thrownPinTimeLeft = pinTimeLimit;
-    if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
-    updateTimerUI();
+    if (timerBarWrap && lastPulseLow) {
+      timerBarWrap.classList.remove('pulse-low');
+      lastPulseLow = false;
+    }
+    updateTimerUI(true);
   }
 
-  function updateTimerUI() {
+  function updateTimerUI(force = false) {
     if (!timerFill || !timerValue) return;
     const ratio = Math.max(0, Math.min(1, pinTimeLeft / Math.max(0.1, pinTimeLimit)));
-    const bonusPreview = calculatePinSpeedBonus(pinTimeLeft);
 
-    timerFill.style.width = `${(ratio * 100).toFixed(1)}%`;
+    // GPU birleştirici (compositor) üzerinden sıfır DOM Reflow ile bar genişliği güncellemesi
+    timerFill.style.transform = `scaleX(${ratio.toFixed(3)}) translateZ(0)`;
 
-    if (ratio > 0.5) {
-      timerFill.style.background = 'linear-gradient(90deg, #00f5d4, #00e5ff)';
-      timerValue.style.color = '#00f5d4';
-      if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
-    } else if (ratio > 0.25) {
-      timerFill.style.background = 'linear-gradient(90deg, #ffcc00, #ff9933)';
-      timerValue.style.color = '#ffcc00';
-      if (timerBarWrap) timerBarWrap.classList.remove('pulse-low');
-    } else {
-      timerFill.style.background = 'linear-gradient(90deg, #ff3366, #ff6b35)';
-      timerValue.style.color = '#ff3366';
-      if (timerBarWrap) {
-        if (ratio > 0 && gameState === 'PLAYING' && !activePin) {
-          timerBarWrap.classList.add('pulse-low');
-        } else {
-          timerBarWrap.classList.remove('pulse-low');
-        }
+    const tier = ratio > 0.5 ? 'high' : ratio > 0.25 ? 'mid' : 'low';
+    if (force || tier !== lastTimerTier) {
+      lastTimerTier = tier;
+      if (tier === 'high') {
+        timerFill.style.background = 'linear-gradient(90deg, #00f5d4, #00e5ff)';
+        timerValue.style.color = '#00f5d4';
+      } else if (tier === 'mid') {
+        timerFill.style.background = 'linear-gradient(90deg, #ffcc00, #ff9933)';
+        timerValue.style.color = '#ffcc00';
+      } else {
+        timerFill.style.background = 'linear-gradient(90deg, #ff3366, #ff6b35)';
+        timerValue.style.color = '#ff3366';
       }
     }
 
-    if (timerLabel) {
-      timerLabel.textContent = '⏱️ İğne Süresi';
+    const shouldPulse = tier === 'low' && ratio > 0 && gameState === 'PLAYING' && !activePin;
+    if (timerBarWrap && shouldPulse !== lastPulseLow) {
+      lastPulseLow = shouldPulse;
+      if (shouldPulse) {
+        timerBarWrap.classList.add('pulse-low');
+      } else {
+        timerBarWrap.classList.remove('pulse-low');
+      }
     }
-    timerValue.textContent = `${pinTimeLeft.toFixed(1)}s • ⚡+${bonusPreview} P`;
+
+    const timeStr = pinTimeLeft.toFixed(1);
+    if (force || timeStr !== lastTimerText) {
+      lastTimerText = timeStr;
+      const bonusPreview = calculatePinSpeedBonus(pinTimeLeft);
+      timerValue.textContent = `${timeStr}s • ⚡+${bonusPreview} P`;
+    }
   }
 
-  // Responsive Fullscreen Canvas Setup (Mobil WebView & Safari Güvenli Boyutlandırma)
+  // Responsive Fullscreen Canvas Setup (Mobil WebView, Android GPU & Safari Güvenli Boyutlandırma)
   function resizeCanvas() {
     try {
       const rect = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
@@ -893,7 +914,9 @@
 
       width = Math.max(280, rect.width || fallbackW);
       height = Math.max(420, rect.height || fallbackH);
-      dpr = Math.min(Math.max(1, window.devicePixelRatio || 1), 2.5);
+      // Android cihazlarda yüksek çözünürlüklü ekranlarda GPU dolum (fill-rate) darboğazını önlemek için DPR sınırla
+      const maxDpr = isAndroid ? 1.5 : 2.25;
+      dpr = Math.min(Math.max(1, window.devicePixelRatio || 1), maxDpr);
 
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
@@ -1163,7 +1186,9 @@
 
   // Particle & Floating Text Helpers
   function spawnParticles(x, y, color, count = 18, speedMultiplier = 1) {
-    for (let i = 0; i < count; i++) {
+    const actualCount = isAndroid ? Math.max(6, Math.round(count * 0.55)) : count;
+    const maxParticles = isAndroid ? 36 : 80;
+    for (let i = 0; i < actualCount; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = (60 + Math.random() * 190) * speedMultiplier;
       particles.push({
@@ -1176,6 +1201,9 @@
         alpha: 1,
         decay: 1.4 + Math.random() * 1.2
       });
+    }
+    if (particles.length > maxParticles) {
+      particles.splice(0, particles.length - maxParticles);
     }
   }
 
@@ -1585,11 +1613,20 @@
 
     ctx.setLineDash([]);
     const targetY = wheel.y + wheel.radius + 6;
-    ctx.fillStyle = isTargetMatchingNow ? currentReadyColor : 'rgba(255, 255, 255, 0.35)';
     if (isTargetMatchingNow) {
-      ctx.shadowColor = currentReadyColor;
-      ctx.shadowBlur = 12;
+      if (!isAndroid) {
+        ctx.shadowColor = currentReadyColor;
+        ctx.shadowBlur = 12;
+      } else {
+        ctx.fillStyle = currentReadyColor;
+        ctx.globalAlpha = 0.28;
+        ctx.beginPath();
+        ctx.arc(wheel.x, targetY + 2, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
     }
+    ctx.fillStyle = isTargetMatchingNow ? currentReadyColor : 'rgba(255, 255, 255, 0.35)';
     ctx.beginPath();
     ctx.moveTo(wheel.x, targetY - 3);
     ctx.lineTo(wheel.x - 6, targetY + 6);
@@ -1600,7 +1637,10 @@
   }
 
   function drawStuckPins() {
-    for (const p of stuckPins) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (let i = 0; i < stuckPins.length; i++) {
+      const p = stuckPins[i];
       p.scale += (1 - p.scale) * 0.18;
       const worldAngle = wheel.angle + p.angle;
       const cos = Math.cos(worldAngle);
@@ -1611,37 +1651,47 @@
       const outerDist = wheel.radius + wheel.pinLength * p.scale;
       const outerX = wheel.x + cos * outerDist;
       const outerY = wheel.y + sin * outerDist;
+      const headR = wheel.pinHeadRadius * p.scale;
 
-      ctx.save();
       ctx.strokeStyle = p.matched ? p.color : p.isObstacle ? 'rgba(225, 232, 238, 0.85)' : '#ffffff';
       ctx.lineWidth = p.matched ? 3.8 : 3.2;
-      ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(innerX, innerY);
       ctx.lineTo(outerX, outerY);
       ctx.stroke();
 
+      // Android Skia'da shadowBlur yerine sıfır maliyetli neon hale (halo) çizimi
+      if (isAndroid) {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.matched ? 0.32 : 0.2;
+        ctx.beginPath();
+        ctx.arc(outerX, outerY, headR * (p.matched ? 1.55 : 1.35), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = p.matched ? 12 : 7;
+      }
+
       ctx.fillStyle = p.color;
-      ctx.shadowColor = p.color;
-      ctx.shadowBlur = p.matched ? 15 : 9;
       ctx.beginPath();
-      ctx.arc(outerX, outerY, wheel.pinHeadRadius * p.scale, 0, Math.PI * 2);
+      ctx.arc(outerX, outerY, headR, 0, Math.PI * 2);
       ctx.fill();
 
+      if (!isAndroid) ctx.shadowBlur = 0;
+
       if (p.matched || p.isObstacle) {
-        ctx.shadowBlur = 0;
         ctx.lineWidth = 1.6;
         ctx.strokeStyle = p.matched ? '#ffffff' : 'rgba(255, 255, 255, 0.65)';
         ctx.stroke();
       }
 
-      ctx.shadowBlur = 0;
       ctx.fillStyle = 'rgba(255,255,255,0.45)';
       ctx.beginPath();
       ctx.arc(outerX - 2, outerY - 2, wheel.pinHeadRadius * 0.3, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
     }
+    ctx.restore();
   }
 
   function drawBonusStars() {
@@ -1658,9 +1708,17 @@
       ctx.rotate(worldAngle + Math.PI / 2);
       ctx.scale(scale, scale);
 
+      if (isAndroid) {
+        ctx.fillStyle = 'rgba(255, 204, 0, 0.25)';
+        ctx.beginPath();
+        ctx.arc(0, 0, 12.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.shadowColor = '#FFCC00';
+        ctx.shadowBlur = 12;
+      }
+
       ctx.fillStyle = '#FFCC00';
-      ctx.shadowColor = '#FFCC00';
-      ctx.shadowBlur = 12;
       ctx.beginPath();
       const spikes = 5;
       const outerR = 9.5;
@@ -1684,12 +1742,18 @@
     const segments = wheel.palette.length;
     const arcStep = (Math.PI * 2) / segments;
 
+    // Çark dış halesi: 6 dilimin her birinde ayrı Gaussian blur çalıştırmak yerine tek seferde hafif dış halka
+    ctx.save();
+    ctx.strokeStyle = wheel.glowColor || 'rgba(0, 245, 212, 0.35)';
+    ctx.lineWidth = isAndroid ? 8 : 10;
+    ctx.beginPath();
+    ctx.arc(wheel.x, wheel.y, r + 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
     ctx.save();
     ctx.translate(wheel.x, wheel.y);
     ctx.rotate(wheel.angle);
-
-    ctx.shadowColor = wheel.glowColor || 'rgba(0, 245, 212, 0.35)';
-    ctx.shadowBlur = 22;
 
     for (let i = 0; i < segments; i++) {
       ctx.beginPath();
@@ -1708,7 +1772,6 @@
       }
     }
 
-    ctx.shadowBlur = 0;
     ctx.lineWidth = 3.5;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
     ctx.beginPath();
@@ -1735,8 +1798,10 @@
     if (timeRatio > 0) {
       const ringColor = getTimerColor(timeRatio);
       ctx.strokeStyle = ringColor;
-      ctx.shadowColor = ringColor;
-      ctx.shadowBlur = 8;
+      if (!isAndroid) {
+        ctx.shadowColor = ringColor;
+        ctx.shadowBlur = 8;
+      }
       ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.arc(wheel.x, wheel.y, ringRadius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * timeRatio);
@@ -1766,6 +1831,7 @@
     ctx.globalAlpha = alpha;
 
     const headY = tipY + wheel.pinLength;
+    const headR = wheel.pinHeadRadius * 1.12;
     ctx.strokeStyle = color;
     ctx.lineWidth = 3.5;
     ctx.lineCap = 'round';
@@ -1774,14 +1840,24 @@
     ctx.lineTo(x, headY);
     ctx.stroke();
 
+    if (isAndroid) {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = alpha * 0.26;
+      ctx.beginPath();
+      ctx.arc(x, headY, headR * 1.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = alpha;
+    } else {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14;
+    }
+
     ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 14;
     ctx.beginPath();
-    ctx.arc(x, headY, wheel.pinHeadRadius * 1.12, 0, Math.PI * 2);
+    ctx.arc(x, headY, headR, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.shadowBlur = 0;
+    if (!isAndroid) ctx.shadowBlur = 0;
     ctx.lineWidth = 1.8;
     ctx.strokeStyle = '#ffffff';
     ctx.stroke();
@@ -1817,43 +1893,52 @@
     const maxVisibleDots = Math.min(queueStartCount, 7);
     const dotStartY = Math.min(height - 18, launchY + wheel.pinLength + 22);
 
+    ctx.save();
     for (let i = 0; i < maxVisibleDots; i++) {
       const colorIdx = totalPinsForLevel - queueStartCount + i;
       const col = pinQueueColors[colorIdx] || wheel.palette[colorIdx % wheel.palette.length];
       const offsetX = (i - (maxVisibleDots - 1) / 2) * 19;
 
-      ctx.save();
       ctx.fillStyle = col;
       ctx.globalAlpha = 0.88 - i * 0.08;
       ctx.beginPath();
       ctx.arc(wheel.x + offsetX, dotStartY, 5.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
     }
+    ctx.restore();
   }
 
   function drawParticlesAndTexts() {
-    for (const p of particles) {
+    if (particles.length > 0) {
       ctx.save();
-      ctx.globalAlpha = Math.max(0, p.alpha);
-      ctx.fillStyle = p.color;
-      ctx.shadowColor = p.color;
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      ctx.fill();
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        ctx.globalAlpha = Math.max(0, p.alpha);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
 
-    for (const ft of floatingTexts) {
+    if (floatingTexts.length > 0) {
       ctx.save();
-      ctx.globalAlpha = Math.max(0, ft.alpha);
-      ctx.font = `800 ${ft.size}px system-ui, sans-serif`;
-      ctx.fillStyle = ft.color;
       ctx.textAlign = 'center';
-      ctx.shadowColor = 'rgba(0,0,0,0.75)';
-      ctx.shadowBlur = 6;
-      ctx.fillText(ft.text, ft.x, ft.y);
+      for (let i = 0; i < floatingTexts.length; i++) {
+        const ft = floatingTexts[i];
+        ctx.globalAlpha = Math.max(0, ft.alpha);
+        ctx.font = `800 ${ft.size}px system-ui, sans-serif`;
+        if (!isAndroid) {
+          ctx.shadowColor = 'rgba(0,0,0,0.75)';
+          ctx.shadowBlur = 6;
+        } else {
+          ctx.fillStyle = 'rgba(0,0,0,0.65)';
+          ctx.fillText(ft.text, ft.x + 1, ft.y + 1.5);
+        }
+        ctx.fillStyle = ft.color;
+        ctx.fillText(ft.text, ft.x, ft.y);
+      }
       ctx.restore();
     }
   }
