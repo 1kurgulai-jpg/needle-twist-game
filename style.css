@@ -78,6 +78,9 @@ html, body {
   display: block;
   cursor: pointer;
   touch-action: none;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* Top HUD */
@@ -260,8 +263,32 @@ html, body {
   height: 100%;
   background: linear-gradient(90deg, var(--turquoise), var(--turquoise-bright));
   border-radius: 999px;
-  box-shadow: 0 0 10px rgba(0, 245, 212, 0.5);
-  transition: width 0.08s linear, background 0.25s ease;
+  transform-origin: left center;
+  transform: scaleX(1) translateZ(0);
+  will-change: transform;
+  transition: background 0.25s ease;
+}
+
+/* Android GPU Performans Optimizasyonu (Canlı Canvas Üzerindeki Ağır Blur Efektlerini Kaldır) */
+.is-android .hud-card,
+.is-android .icon-btn,
+.is-android .difficulty-banner,
+.is-android .timer-bar-wrap {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: rgba(10, 24, 46, 0.94);
+  box-shadow: none;
+}
+
+.is-android .overlay {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: rgba(6, 13, 28, 0.93);
+}
+
+.is-android .modal-logo {
+  filter: none;
+  animation: none;
 }
 
 /* Overlays / Modals */
