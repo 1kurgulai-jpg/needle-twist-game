@@ -1742,15 +1742,6 @@
     const segments = wheel.palette.length;
     const arcStep = (Math.PI * 2) / segments;
 
-    // Çark dış halesi: 6 dilimin her birinde ayrı Gaussian blur çalıştırmak yerine tek seferde hafif dış halka
-    ctx.save();
-    ctx.strokeStyle = wheel.glowColor || 'rgba(0, 245, 212, 0.35)';
-    ctx.lineWidth = isAndroid ? 8 : 10;
-    ctx.beginPath();
-    ctx.arc(wheel.x, wheel.y, r + 2, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-
     ctx.save();
     ctx.translate(wheel.x, wheel.y);
     ctx.rotate(wheel.angle);
