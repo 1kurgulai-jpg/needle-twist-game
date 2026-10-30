@@ -12,7 +12,8 @@
   } catch (err) {}
 
   const canvas = document.getElementById('gameCanvas');
-  const ctx = canvas.getContext('2d', { alpha: true });
+  const ctx = canvas ? canvas.getContext('2d') : null;
+  const gameContainer = document.getElementById('game-container');
 
   // UI Elements
   const hudScore = document.getElementById('hudScore');
@@ -90,11 +91,11 @@
   function trackAnalyticsEvent(eventName, params = {}) {
     try {
       if (typeof window.gtag === 'function') {
-        window.gtag('event', eventName, {
-          ...params,
+        const payload = Object.assign({}, params, {
           game_name: 'needle_twist_game',
           timestamp: new Date().toISOString()
         });
+        window.gtag('event', eventName, payload);
       }
     } catch (err) {
       // Ad-blocker veya çevrimdışı durumda sessizce devam et
@@ -508,22 +509,42 @@
     }
 
     // 2. Aşama: Aynı kullanıcı adına (playerKey) sahip kayıtları da tekilleştir (en yüksek skoru tut)
+    const stage1Combined = [];
+    uniqueByDevice.forEach((val) => stage1Combined.push(val));
+    for (let i = 0; i < withoutDevice.length; i++) {
+      stage1Combined.push(withoutDevice[i]);
+    }
+
     const uniqueByNickname = new Map();
-    for (const item of [...uniqueByDevice.values(), ...withoutDevice]) {
+    for (let i = 0; i < stage1Combined.length; i++) {
+      const item = stage1Combined[i];
       const existing = uniqueByNickname.get(item.playerKey);
       if (!existing || item.score > existing.score || (item.score === existing.score && item.level > existing.level)) {
         uniqueByNickname.set(item.playerKey, item);
       }
     }
 
-    return Array.from(uniqueByNickname.values()).sort((a, b) => b.score - a.score || b.level - a.level);
+    const finalResult = [];
+    uniqueByNickname.forEach((val) => finalResult.push(val));
+    return finalResult.sort((a, b) => b.score - a.score || b.level - a.level);
   }
 
   function mergeAndSortTop10(...scoreArrays) {
     return deduplicateByPlayerBest(...scoreArrays).slice(0, 10);
   }
 
-  async function syncPermanentCloudLeaderboard(mergedList, singleEntry = null) {
+  function safeFetch(url, options) {
+    try {
+      if (typeof window.fetch !== 'function') {
+        return Promise.reject(new Error('fetch_unsupported'));
+      }
+      return window.fetch(url, options);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  function syncPermanentCloudLeaderboard(mergedList, singleEntry = null) {
     const cleanPayload = {
       updatedAt: new Date().toISOString(),
       scores: mergedList.slice(0, 30)
@@ -533,7 +554,7 @@
 
     // 1. Süresiz Kalıcı KVDB Veritabanına Tam Tabloyu Kaydet (12 saat sınırı YOKTUR)
     tasks.push(
-      fetch(PERMANENT_KV_URL, {
+      safeFetch(PERMANENT_KV_URL, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify(cleanPayload)
@@ -542,11 +563,11 @@
 
     // 2. Canlı Akış Sunucusuna (ntfy) hem tekil skoru hem de tam tablo yedeğini (snapshot) gönder
     const snapshotObj = singleEntry
-      ? { ...singleEntry, type: 'snapshot', scores: mergedList.slice(0, 20) }
+      ? Object.assign({}, singleEntry, { type: 'snapshot', scores: mergedList.slice(0, 20) })
       : { type: 'snapshot', scores: mergedList.slice(0, 20) };
 
     tasks.push(
-      fetch(CLOUD_LEADERBOARD_URL, {
+      safeFetch(CLOUD_LEADERBOARD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: JSON.stringify(snapshotObj)
@@ -555,7 +576,7 @@
 
     if (FIREBASE_DB_URL && singleEntry) {
       tasks.push(
-        fetch(FIREBASE_DB_URL, {
+        safeFetch(FIREBASE_DB_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(singleEntry)
@@ -563,10 +584,10 @@
       );
     }
 
-    await safeAllSettled(tasks);
+    return safeAllSettled(tasks);
   }
 
-  async function fetchGlobalScores() {
+  function fetchGlobalScores() {
     if (syncBadge) {
       syncBadge.textContent = '⏳ Senkronize...';
     }
@@ -575,90 +596,110 @@
     let streamScores = [];
     let fetchedAnyCloud = false;
 
-    try {
-      const [kvRes, ntfyRes] = await safeAllSettled([
-        fetch(PERMANENT_KV_URL, { cache: 'no-store' }),
-        fetch(`${CLOUD_LEADERBOARD_URL}/json?poll=1&since=all`, { cache: 'no-store' })
-      ]);
+    return safeAllSettled([
+      safeFetch(PERMANENT_KV_URL, { cache: 'no-store' }),
+      safeFetch(`${CLOUD_LEADERBOARD_URL}/json?poll=1&since=all`, { cache: 'no-store' })
+    ])
+      .then((results) => {
+        const kvRes = results[0];
+        const ntfyRes = results[1];
 
-      // 1. Kalıcı Veritabanından (KVDB) Oku
-      if (kvRes.status === 'fulfilled' && kvRes.value && kvRes.value.ok) {
-        fetchedAnyCloud = true;
-        const kvData = await kvRes.value.json();
-        if (kvData && Array.isArray(kvData.scores)) {
-          permanentScores = kvData.scores;
-        } else if (Array.isArray(kvData)) {
-          permanentScores = kvData;
-        }
-      }
+        const p1 =
+          kvRes && kvRes.status === 'fulfilled' && kvRes.value && kvRes.value.ok
+            ? kvRes.value
+                .json()
+                .then((kvData) => {
+                  fetchedAnyCloud = true;
+                  if (kvData && Array.isArray(kvData.scores)) {
+                    permanentScores = kvData.scores;
+                  } else if (Array.isArray(kvData)) {
+                    permanentScores = kvData;
+                  }
+                })
+                .catch(() => {})
+            : Promise.resolve();
 
-      // 2. Canlı Akıştan (ntfy) Hem Tekil Skorları Hem Snapshot Yedeklerini Oku
-      if (ntfyRes.status === 'fulfilled' && ntfyRes.value && ntfyRes.value.ok) {
-        fetchedAnyCloud = true;
-        const text = await ntfyRes.value.text();
-        const lines = text.split('\n').filter((l) => l.trim().length > 0);
-        for (const line of lines) {
-          try {
-            const envelope = JSON.parse(line);
-            if (envelope && envelope.event === 'message' && envelope.message) {
-              const msgObj = JSON.parse(envelope.message);
-              if (msgObj && Array.isArray(msgObj.scores)) {
-                streamScores.push(...msgObj.scores);
-              }
-              if (msgObj && typeof msgObj.score === 'number' && msgObj.name) {
-                streamScores.push(msgObj);
-              }
+        const p2 =
+          ntfyRes && ntfyRes.status === 'fulfilled' && ntfyRes.value && ntfyRes.value.ok
+            ? ntfyRes.value
+                .text()
+                .then((text) => {
+                  fetchedAnyCloud = true;
+                  const lines = String(text || '')
+                    .split('\n')
+                    .filter((l) => l.trim().length > 0);
+                  for (let i = 0; i < lines.length; i++) {
+                    try {
+                      const envelope = JSON.parse(lines[i]);
+                      if (envelope && envelope.event === 'message' && envelope.message) {
+                        const msgObj = JSON.parse(envelope.message);
+                        if (msgObj && Array.isArray(msgObj.scores)) {
+                          for (let j = 0; j < msgObj.scores.length; j++) {
+                            streamScores.push(msgObj.scores[j]);
+                          }
+                        }
+                        if (msgObj && typeof msgObj.score === 'number' && msgObj.name) {
+                          streamScores.push(msgObj);
+                        }
+                      }
+                    } catch (err) {
+                      // skip malformed line
+                    }
+                  }
+                })
+                .catch(() => {})
+            : Promise.resolve();
+
+        return safeAllSettled([p1, p2]);
+      })
+      .then(() => {
+        if (fetchedAnyCloud) {
+          cachedCloudScores = permanentScores.concat(streamScores);
+
+          // Tüm kaynakları (Kalıcı Bulut + Canlı Akış + Bu Cihazın Yerel Hafızası) birleştir
+          const mergedAll = deduplicateByPlayerBest();
+          setLocalScores(mergedAll);
+          cachedCloudScores = mergedAll;
+
+          // Eğer bu cihazın yerel hafızasında olup kalıcı bulutta eksik/düşük kalan bir rekor varsa otomatik geri yükle!
+          const permanentMap = new Map();
+          for (let i = 0; i < permanentScores.length; i++) {
+            const p = permanentScores[i];
+            if (p && p.name && typeof p.score === 'number') {
+              permanentMap.set(normalizePlayerKey(p.name), Number(p.score) || 0);
             }
-          } catch (err) {
-            // skip malformed line
+          }
+
+          const needsCloudRestore = mergedAll.some((item) => {
+            const cloudScore = permanentMap.get(item.playerKey);
+            return cloudScore === undefined || item.score > cloudScore;
+          });
+
+          if (needsCloudRestore && mergedAll.length > 0) {
+            syncPermanentCloudLeaderboard(mergedAll).catch(() => {});
+          }
+
+          if (syncBadge) {
+            syncBadge.textContent = '🌐 Kalıcı Küresel';
+          }
+        } else {
+          if (syncBadge) {
+            syncBadge.textContent = '📱 Çevrimdışı Önbellek';
           }
         }
-      }
-
-      if (fetchedAnyCloud) {
-        cachedCloudScores = [...permanentScores, ...streamScores];
-
-        // Tüm kaynakları (Kalıcı Bulut + Canlı Akış + Bu Cihazın Yerel Hafızası) birleştir
-        const mergedAll = deduplicateByPlayerBest();
-        setLocalScores(mergedAll);
-        cachedCloudScores = mergedAll;
-
-        // Eğer bu cihazın yerel hafızasında (örn. 15 saat önce oynanmış) olup kalıcı bulutta eksik/düşük kalan bir rekor varsa otomatik geri yükle!
-        const permanentMap = new Map();
-        for (const p of permanentScores) {
-          if (p && p.name && typeof p.score === 'number') {
-            permanentMap.set(normalizePlayerKey(p.name), Number(p.score) || 0);
-          }
-        }
-
-        const needsCloudRestore = mergedAll.some((item) => {
-          const cloudScore = permanentMap.get(item.playerKey);
-          return cloudScore === undefined || item.score > cloudScore;
-        });
-
-        if (needsCloudRestore && mergedAll.length > 0) {
-          syncPermanentCloudLeaderboard(mergedAll).catch(() => {});
-        }
-
-        if (syncBadge) {
-          syncBadge.textContent = '🌐 Kalıcı Küresel';
-        }
-      } else {
+      })
+      .catch(() => {
         if (syncBadge) {
           syncBadge.textContent = '📱 Çevrimdışı Önbellek';
         }
-      }
-    } catch (err) {
-      if (syncBadge) {
-        syncBadge.textContent = '📱 Çevrimdışı Önbellek';
-      }
-    }
-
-    renderScoreboard();
-    updateHudBest();
+      })
+      .then(() => {
+        renderScoreboard();
+        updateHudBest();
+      });
   }
 
-  async function saveScoreEntry(name, pts, lvl) {
+  function saveScoreEntry(name, pts, lvl) {
     const deviceId = getDeviceId();
     const existingLockedName = getLockedDeviceName();
     // Cihazda daha önce kaydedilmiş bir kullanıcı adı varsa her zaman o tek ismi kullan
@@ -697,7 +738,7 @@
         kept_best_score: existingRecord.score,
         level: newLevel
       });
-      return;
+      return Promise.resolve();
     }
 
     const entry = {
@@ -731,25 +772,26 @@
     if (syncBadge) {
       syncBadge.textContent = '⏳ Gönderiliyor...';
     }
-    try {
-      await syncPermanentCloudLeaderboard(mergedList, entry);
-      if (syncBadge) {
-        syncBadge.textContent = '🌐 Kalıcı Küresel';
-      }
-    } catch (err) {
-      if (syncBadge) {
-        syncBadge.textContent = '📱 Yerel Kaydedildi';
-      }
-    }
-
-    if (saveFeedback) {
-      saveFeedback.style.display = 'block';
-      saveFeedback.textContent = existingRecord
-        ? `🏆 Yeni Kişisel Rekor! "${cleanName}" satırı ${existingRecord.score} P ➔ ${entry.score} P olarak kalıcı güncellendi!`
-        : `✅ Cihaz kullanıcısı "${cleanName}" (${entry.score} P) kalıcı tabloya kaydedildi!`;
-    }
-
-    renderScoreboard();
+    return syncPermanentCloudLeaderboard(mergedList, entry)
+      .then(() => {
+        if (syncBadge) {
+          syncBadge.textContent = '🌐 Kalıcı Küresel';
+        }
+      })
+      .catch(() => {
+        if (syncBadge) {
+          syncBadge.textContent = '📱 Yerel Kaydedildi';
+        }
+      })
+      .then(() => {
+        if (saveFeedback) {
+          saveFeedback.style.display = 'block';
+          saveFeedback.textContent = existingRecord
+            ? `🏆 Yeni Kişisel Rekor! "${cleanName}" satırı ${existingRecord.score} P ➔ ${entry.score} P olarak kalıcı güncellendi!`
+            : `✅ Cihaz kullanıcısı "${cleanName}" (${entry.score} P) kalıcı tabloya kaydedildi!`;
+        }
+        renderScoreboard();
+      });
   }
 
   function updateHudBest() {
@@ -787,6 +829,9 @@
       }
       if (document.body && document.body.style) {
         document.body.style.backgroundColor = theme.bgDark;
+      }
+      if (gameContainer && gameContainer.style) {
+        gameContainer.style.backgroundColor = theme.bgDark;
       }
     } catch (err) {
       // CSS değişkeni desteklemeyen eski tarayıcılarda çökmeden devam et
@@ -909,22 +954,31 @@
   function resizeCanvas() {
     try {
       const rect = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
-      const fallbackW = window.innerWidth || document.documentElement.clientWidth || 360;
-      const fallbackH = window.innerHeight || document.documentElement.clientHeight || 640;
+      const docW = document.documentElement ? document.documentElement.clientWidth : 0;
+      const docH = document.documentElement ? document.documentElement.clientHeight : 0;
+      const screenW = typeof window.screen !== 'undefined' ? window.screen.width : 0;
+      const screenH = typeof window.screen !== 'undefined' ? window.screen.height : 0;
+
+      const fallbackW = window.innerWidth || docW || screenW || 360;
+      const fallbackH = window.innerHeight || docH || screenH || 640;
 
       width = Math.max(280, rect.width || fallbackW);
       height = Math.max(420, rect.height || fallbackH);
       // Android cihazlarda yüksek çözünürlüklü ekranlarda GPU dolum (fill-rate) darboğazını önlemek için DPR sınırla
-      const maxDpr = isAndroid ? 1.5 : 2.25;
+      const maxDpr = isAndroid ? 1.5 : 2.0;
       dpr = Math.min(Math.max(1, window.devicePixelRatio || 1), maxDpr);
 
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
-      if (typeof ctx.setTransform === 'function') {
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      } else if (typeof ctx.resetTransform === 'function') {
-        ctx.resetTransform();
-        ctx.scale(dpr, dpr);
+      if (canvas) {
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+      }
+      if (ctx) {
+        if (typeof ctx.setTransform === 'function') {
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        } else if (typeof ctx.resetTransform === 'function') {
+          ctx.resetTransform();
+          ctx.scale(dpr, dpr);
+        }
       }
 
       const topHudBottom = 132;
@@ -1556,9 +1610,11 @@
     }, 650);
   }
 
-  // Rendering
+  // Rendering (Şeffaf Canvas GPU Hatalarını Önlemek İçin Koyu Arka Planı Doğrudan Çiz)
   function draw() {
-    ctx.clearRect(0, 0, width, height);
+    if (!ctx) return;
+    ctx.fillStyle = (currentTheme && currentTheme.bgDark) || '#071324';
+    ctx.fillRect(0, 0, width, height);
 
     ctx.save();
     if (shakeTime > 0) {
@@ -1603,7 +1659,9 @@
       currentReadyColor &&
       bottomSliceColor.toLowerCase() === currentReadyColor.toLowerCase();
 
-    ctx.setLineDash([5, 7]);
+    if (typeof ctx.setLineDash === 'function') {
+      ctx.setLineDash([5, 7]);
+    }
     ctx.strokeStyle = isTargetMatchingNow ? currentReadyColor : 'rgba(255, 255, 255, 0.14)';
     ctx.lineWidth = isTargetMatchingNow ? 2.5 : 1.5;
     ctx.beginPath();
@@ -1611,7 +1669,9 @@
     ctx.lineTo(wheel.x, getLaunchY() - 14);
     ctx.stroke();
 
-    ctx.setLineDash([]);
+    if (typeof ctx.setLineDash === 'function') {
+      ctx.setLineDash([]);
+    }
     const targetY = wheel.y + wheel.radius + 6;
     if (isTargetMatchingNow) {
       if (!isAndroid) {
@@ -1964,7 +2024,7 @@
     });
   }
 
-  async function showGameOverModal() {
+  function showGameOverModal() {
     const lockedName = getLockedDeviceName();
 
     modalTitle.textContent = 'OYUN BİTTİ!';
@@ -1991,9 +2051,12 @@
         // Cihazda kayıtlı tek kullanıcı adı varsa farklı isim girilmesini engelle ve rekoru otomatik güncelle
         saveScoreForm.style.display = 'none';
         scoreSavedForRun = true;
-        await fetchGlobalScores();
-        await saveScoreEntry(lockedName, score, level);
-        modalSubtitle.textContent = `Cihaz kullanıcısı: "${lockedName}" • Yalnızca en yüksek rekorun tabloda yer alır.`;
+        fetchGlobalScores()
+          .then(() => saveScoreEntry(lockedName, score, level))
+          .then(() => {
+            modalSubtitle.textContent = `Cihaz kullanıcısı: "${lockedName}" • Yalnızca en yüksek rekorun tabloda yer alır.`;
+          })
+          .catch(() => {});
       } else {
         // Bu cihazdan ilk kez skor kaydediliyorsa tek seferlik kullanıcı adı seçimine izin ver
         saveScoreForm.style.display = 'flex';
@@ -2097,7 +2160,7 @@
   }
 
   if (saveScoreForm) {
-    saveScoreForm.addEventListener('submit', async (e) => {
+    saveScoreForm.addEventListener('submit', (e) => {
       e.preventDefault();
       if (scoreSavedForRun) return;
       scoreSavedForRun = true;
@@ -2106,7 +2169,7 @@
         btnSubmitScore.textContent = 'Kaydediliyor...';
       }
       saveScoreForm.style.display = 'none';
-      await saveScoreEntry(playerNameInput ? playerNameInput.value : 'Oyuncu', score, level);
+      saveScoreEntry(playerNameInput ? playerNameInput.value : 'Oyuncu', score, level).catch(() => {});
     });
   }
 
@@ -2120,6 +2183,9 @@
   let lastFrameTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
   function loop(now) {
     try {
+      if (canvas && canvas.clientWidth > 200 && Math.abs(canvas.clientWidth - width) > 6) {
+        resizeCanvas();
+      }
       const currentNow =
         typeof now === 'number' ? now : typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
       const rawDt = (currentNow - lastFrameTime) / 1000;
@@ -2134,7 +2200,7 @@
     requestAnimationFrame(loop);
   }
 
-  // Initialize (Güvenli Başlatma)
+  // Initialize (Güvenli Başlatma & Mobil Uygulama İçi Tarayıcı Boyut Kurtarma)
   try {
     resizeCanvas();
     updateHudLives();
@@ -2142,6 +2208,11 @@
     renderScoreboard();
     updateHudBest();
     fetchGlobalScores();
+
+    // WhatsApp, Instagram, Telegram gibi uygulama içi WebView'larda ekran boyutu geç oturduğunda otomatik güncelle
+    setTimeout(resizeCanvas, 60);
+    setTimeout(resizeCanvas, 250);
+    setTimeout(resizeCanvas, 700);
   } catch (err) {
     // Başlatma sırasında beklenmeyen bir depolama/tarayıcı hatası olursa varsayılanlarla devam et
   }
